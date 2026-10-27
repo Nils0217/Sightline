@@ -60,11 +60,14 @@ SAM_PER_IMAGE = 0.0025
 # Reasoning tokens count toward this cap; 1024 left 3/5 answers empty at effort=medium.
 SPARK_MAX_OUTPUT_TOKENS = 2048
 
+# Asking for "the single main object" made Spark answer UNSURE on every cluttered room
+# photo (2026-10-27), so ask for a ranked list and segment the first item.
 NAMING_PROMPT = (
-    "You help a blind user find objects. Name the single main graspable object in this photo "
-    "as one short lowercase noun phrase (1 to 3 words) that works as a segmentation prompt, "
-    "e.g. 'cup' or 'tv remote'. If you are not sure, reply exactly UNSURE. "
-    "Reply with the noun phrase only."
+    "You help a blind user find objects. List up to 5 distinct graspable household objects "
+    "you can clearly see in this photo, most clearly visible first. Use short lowercase noun "
+    "phrases (1 to 3 words) that work as segmentation prompts, e.g. 'cup' or 'tv remote'. "
+    "Reply with the noun phrases separated by commas and nothing else. "
+    "If you cannot clearly identify any, reply exactly UNSURE."
 )
 
 LOG_FIELDS = [
@@ -139,11 +142,11 @@ def log_call(image: str, model: str, noun: str, latency_ms: float,
         })
 
 
-def name_object(client: OpenAI, model: str, data_url: str) -> tuple[str, float, int, int, float, str]:
-    """Return (noun, latency_ms, input_tokens, output_tokens, cost_usd, raw_response_json).
+def name_object(client: OpenAI, model: str, data_url: str) -> tuple[list[str], float, int, int, float, str]:
+    """Return (nouns, latency_ms, input_tokens, output_tokens, cost_usd, raw_response_json).
 
-    noun is a noun phrase, UNSURE (the model said so), or TRUNCATED (no answer:
-    reasoning used up max_output_tokens).
+    nouns is a ranked list of noun phrases, or [UNSURE] (the model said so), or
+    [TRUNCATED] (no answer: reasoning used up max_output_tokens).
     """
     start = time.perf_counter()
     response = client.responses.create(
@@ -153,16 +156,18 @@ def name_object(client: OpenAI, model: str, data_url: str) -> tuple[str, float, 
         max_output_tokens=SPARK_MAX_OUTPUT_TOKENS,
     )
     latency_ms = (time.perf_counter() - start) * 1000
-    noun = (response.output_text or "").strip().strip(".'\"").lower()
-    if not noun:
-        noun = "TRUNCATED"
-    elif noun == "unsure":
-        noun = "UNSURE"
+    text = (response.output_text or "").strip()
+    nouns = [n.strip().strip(".'\"").lower() for n in text.split(",")]
+    nouns = [n for n in nouns if n]
+    if not nouns:
+        nouns = ["TRUNCATED"]
+    elif nouns[0] == "unsure":
+        nouns = ["UNSURE"]
     usage = response.usage
     in_tok = usage.input_tokens if usage else 0
     out_tok = usage.output_tokens if usage else 0
     cost = in_tok / 1e6 * SPARK_INPUT_PER_M + out_tok / 1e6 * SPARK_OUTPUT_PER_M
-    return noun, latency_ms, in_tok, out_tok, cost, response.model_dump_json(indent=2)
+    return nouns, latency_ms, in_tok, out_tok, cost, response.model_dump_json(indent=2)
 
 
 def segment(client: OpenAI, noun: str, data_url: str) -> tuple[str, float, int | None, int | None]:
@@ -255,9 +260,11 @@ def main() -> None:
     for path in images:
         img = downscale(path)
         data_url = to_data_url(img)
-        row = {"image": path.name, "noun": "-", "spark_ms": 0.0, "sam_ms": 0.0, "objects": 0, "cost": 0.0, "error": ""}
+        row = {"image": path.name, "noun": "-", "spark_ms": 0.0, "sam_ms": 0.0, "objects": 0, "cost": 0.0, "error": "", "seen": ""}
         try:
-            noun, ms, in_tok, out_tok, cost, raw = name_object(client, args.model, data_url)
+            nouns, ms, in_tok, out_tok, cost, raw = name_object(client, args.model, data_url)
+            noun = nouns[0]
+            row["seen"] = ", ".join(nouns)
             (OUT_DIR / f"{path.stem}.spark.json").write_text(raw)
             log_call(path.name, args.model, noun, ms, in_tok, out_tok, cost)
             row.update(noun=noun, spark_ms=ms, cost=cost)
@@ -271,7 +278,8 @@ def main() -> None:
         except Exception as exc:  # keep going so one bad image doesn't waste the run
             row["error"] = f"{type(exc).__name__}: {exc}"[:120]
         rows.append(row)
-        print(f"{path.name}: {row['noun']} ({row['objects']} objects){'  ERROR ' + row['error'] if row['error'] else ''}")
+        print(f"{path.name}: segmented '{row['noun']}' ({row['objects']} objects) | Spark saw: {row['seen']}"
+              f"{'  ERROR ' + row['error'] if row['error'] else ''}")
 
     print()
     header = f"{'image':<28}{'noun':<18}{'spark ms':>9}{'sam ms':>9}{'objs':>6}{'cost $':>10}"
