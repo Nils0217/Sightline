@@ -30,7 +30,7 @@ from pathlib import Path
 from openai import OpenAI
 from PIL import Image, ImageDraw, ImageOps
 
-try:  # Meta's official mask decoder; optional until approved as a dependency.
+try:  # Meta's official mask decoder (spike/requirements.txt); script still runs without it.
     from meta_sam_parser import (
         CompletedOutcome,
         SegmentationMaskRecord,
@@ -56,6 +56,9 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".heic"}  # HEIC converted w
 SPARK_INPUT_PER_M = 1.25
 SPARK_OUTPUT_PER_M = 4.25  # reasoning tokens are billed as output
 SAM_PER_IMAGE = 0.0025
+
+# Reasoning tokens count toward this cap; 1024 left 3/5 answers empty at effort=medium.
+SPARK_MAX_OUTPUT_TOKENS = 2048
 
 NAMING_PROMPT = (
     "You help a blind user find objects. Name the single main graspable object in this photo "
@@ -136,24 +139,30 @@ def log_call(image: str, model: str, noun: str, latency_ms: float,
         })
 
 
-def name_object(client: OpenAI, model: str, data_url: str) -> tuple[str, float, int, int, float]:
-    """Return (noun, latency_ms, input_tokens, output_tokens, cost_usd)."""
+def name_object(client: OpenAI, model: str, data_url: str) -> tuple[str, float, int, int, float, str]:
+    """Return (noun, latency_ms, input_tokens, output_tokens, cost_usd, raw_response_json).
+
+    noun is a noun phrase, UNSURE (the model said so), or TRUNCATED (no answer:
+    reasoning used up max_output_tokens).
+    """
     start = time.perf_counter()
     response = client.responses.create(
         model=model,
         input=user_message(NAMING_PROMPT, data_url),
         reasoning={"effort": "medium"},
-        max_output_tokens=1024,  # covers reasoning + the one-word answer
+        max_output_tokens=SPARK_MAX_OUTPUT_TOKENS,
     )
     latency_ms = (time.perf_counter() - start) * 1000
-    noun = (response.output_text or "").strip().strip(".'\"").lower() or "unsure"
-    if noun == "unsure":
+    noun = (response.output_text or "").strip().strip(".'\"").lower()
+    if not noun:
+        noun = "TRUNCATED"
+    elif noun == "unsure":
         noun = "UNSURE"
     usage = response.usage
     in_tok = usage.input_tokens if usage else 0
     out_tok = usage.output_tokens if usage else 0
     cost = in_tok / 1e6 * SPARK_INPUT_PER_M + out_tok / 1e6 * SPARK_OUTPUT_PER_M
-    return noun, latency_ms, in_tok, out_tok, cost
+    return noun, latency_ms, in_tok, out_tok, cost, response.model_dump_json(indent=2)
 
 
 def segment(client: OpenAI, noun: str, data_url: str) -> tuple[str, float, int | None, int | None]:
@@ -248,11 +257,12 @@ def main() -> None:
         data_url = to_data_url(img)
         row = {"image": path.name, "noun": "-", "spark_ms": 0.0, "sam_ms": 0.0, "objects": 0, "cost": 0.0, "error": ""}
         try:
-            noun, ms, in_tok, out_tok, cost = name_object(client, args.model, data_url)
+            noun, ms, in_tok, out_tok, cost, raw = name_object(client, args.model, data_url)
+            (OUT_DIR / f"{path.stem}.spark.json").write_text(raw)
             log_call(path.name, args.model, noun, ms, in_tok, out_tok, cost)
             row.update(noun=noun, spark_ms=ms, cost=cost)
 
-            if noun != "UNSURE":
+            if noun not in ("UNSURE", "TRUNCATED"):
                 sam_text, ms, in_tok, out_tok = segment(client, noun, data_url)
                 log_call(path.name, SAM_MODEL, noun, ms, in_tok, out_tok, SAM_PER_IMAGE)
                 row.update(sam_ms=ms, cost=row["cost"] + SAM_PER_IMAGE)

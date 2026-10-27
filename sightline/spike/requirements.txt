@@ -1,6 +1,5 @@
 # labels: spike, config
 openai>=1.40
 Pillow>=10.0
-# Meta's official SAM 3.1 mask decoder (dependency-free). Optional: without it overlays show boxes only.
-# Pending Nils's approval as a third-party dependency (AGENTS.md); uncomment to enable masks.
-# meta-sam-parser==0.1.0
+# Meta's official SAM 3.1 mask decoder (dependency-free). Approved by Nils 2026-10-27.
+meta-sam-parser==0.1.0

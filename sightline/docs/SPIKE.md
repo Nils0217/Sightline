@@ -41,6 +41,10 @@ Goal: prove the riskiest paths work before building the full app. Record every n
 ### G4 Latency
 - **Pass:** voice command → first spoken guidance ≤ 3 s
 
+## Open questions
+
+- **Spark latency vs. G4 (2026-10-27):** at `reasoning.effort: medium` one image call takes 4.6–7.5 s, over the 3 s budget. Options once S0.2 passes: measure `low` / `minimal` on the same 5 images, or speak an instant local "looking" cue while waiting. AGENTS.md currently mandates `medium`; changing it is Nils's call.
+
 ## Results
 
 | Test | Date | Result | Latency | Cost | Notes |

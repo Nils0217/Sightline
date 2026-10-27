@@ -85,4 +85,8 @@ Output (https://dev.meta.ai/docs/sam/reading-segmentation) is special-token text
 Rate limits (per team): `muse-spark-1.3` 3000 RPM / 4M TPM; `sam-3.1` 3000 RPM.
 
 ## Confirmed on live calls
-_Nothing yet — fill in after the first spike run (actual image token count, latency, any field that differs from the docs)._
+2026-10-27, first spike run (5 iPhone photos, 512×384 JPEG, `muse-spark-1.3`, effort `medium`):
+- Responses API image request worked as documented. Input = **343 tokens** (prompt + one 512 px image).
+- Reasoning used **755 to over 1024 output tokens** for a one-word answer. With `max_output_tokens=1024`, 3/5 calls hit the cap and `output_text` came back empty. Raised to 2048.
+- Latency **4.6–7.5 s** per Spark call. This alone breaks the G4 target (command → first guidance ≤ 3 s); see the open question in `docs/SPIKE.md`.
+- Cost ≈ $0.004–0.005 per Spark image call, almost all of it reasoning tokens.
