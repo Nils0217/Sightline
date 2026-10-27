@@ -11,3 +11,13 @@ Secrets.xcconfig
 
 # macOS
 .DS_Store
+
+# Local logs
+logs/
+spike/out/
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+.venv/
