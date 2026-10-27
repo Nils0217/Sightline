@@ -11,7 +11,13 @@ Say what you want; Sightline finds it and guides your hand to it. An indoor AI g
 - LiDAR obstacle apps (White Cane) give distance only, no meaning.
 - None guide the hand the last metre: "right 10 cm, a bit higher, now grab."
 
-**Hackathon:** Meta Global AI Developer Hackathon, Indie Developer track, *Build for Your World*. Judged on creativity, technical ambition, and whether it works. Submission due 2026-11-04, 6 PM PT.
+**Hackathon:** Meta Global AI Developer Hackathon, Indie Developer track, *Build for Your World*. Submission due 2026-11-04, 9 PM ET (6 PM PT) on the Cerebral Valley platform.
+
+- **Submit:** public repo + 3-minute demo video (primary judging artifact) + code and live product. No hosted link required; a native iOS app is fine.
+- **Must:** use Meta models via Meta Model API; clearly show what was built during the event (Oct 26 – Nov 4). Demo shows only hackathon-built features.
+- **Judging:** Stage 1 pass/fail (fits theme, uses Meta models). Stage 2, 0–10 each: Impact 30%, Use of Meta AI tooling 25%, Technical depth 20%, Demo 25%. Top 5 per track go to a live final round on 11/9.
+- **Bonus prizes worth targeting:** Best Agentic Use-Case ($5K, Muse as commander with tool calling); Most Viral on X ($20K, post the demo by 11/8).
+- **Avoid looking like an anti-project:** "simple image analyzer" and "medical advice" are named. Lead the demo with hand guidance, not object description.
 
 ## Users and scenarios
 Primary: blind and low-vision people. Secondary: older adults with declining sight. Caregivers do the first room scan.
@@ -46,7 +52,7 @@ Primary: blind and low-vision people. Secondary: older adults with declining sig
 | Nils | On-device builds and tests, numbers and logs, scope decisions |
 
 ## Cost model (zero out-of-pocket)
-All usage bills the $150 hackathon Model API credit; no paid Muse Code plan, no card (or a spend limit < $150).
+All usage bills the $150 hackathon Model API credit; no paid Muse Code plan. Meta requires a card on file, so a Spend Limit ≤ $150 is set.
 
 | Item | Estimate |
 |---|---|

@@ -24,7 +24,7 @@ Muse Code works on a branch per task (`muse/<task>`); Claude reviews before merg
 
 ## Cost rules (zero out-of-pocket)
 - All usage bills the $150 hackathon Model API credit. **Never subscribe to a paid Muse Code plan.** Muse Code signs in with the Model API key, not browser sign-in.
-- No card on file, or a spend limit < $150 if one is forced. Alerts at $50 / $100 / $140.
+- Meta requires a card on file to use the credit, so set the Billing **Spend Limit** to $150 or less. Alerts at $50 / $100 / $140.
 - **SAM is event-triggered, not 1 Hz:** call it on target lock, when tracking confidence drops, and once before "now grab". Target ≤ 5 calls per guidance session.
 - **Downscale images to ~512 px** on the long edge before any upload.
 - **Muse Spark `reasoning_effort: medium`**, short `max_tokens` for spoken output.

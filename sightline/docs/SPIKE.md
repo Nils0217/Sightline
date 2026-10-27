@@ -14,14 +14,14 @@ Goal: prove the riskiest paths work before building the full app. Record every n
 
 ### S0.2 Model API round trip
 - [ ] Model API key created at dev.meta.ai, stored in `.env` (gitignored)
-- [ ] Billing shows the $150 credit; alerts at $50 / $100 / $140; no card or spend limit < $150
+- [x] Billing shows the $150 credit (card required by Meta); set Spend Limit ≤ $150; alerts at $50 / $100 / $140
 - [ ] Muse Code signed in with the API key (`/login`), not a paid plan
 - [ ] `spike/model_api_spike.py`: one image → Muse Spark names the main object (`reasoning_effort: medium`) → SAM 3.1 segments it by that noun → save mask overlay
 - [ ] Run on 5 photos in `spike/images/` (include one table with several similar items)
 - **Pass:** mask lands on the right object in ≥ 4/5; record latency and Billing delta
 
 ### S0.3 Rules
-- [ ] Read the hackathon Official Rules: is a native iOS app with video + repo (no live link) acceptable? Exact judging criteria?
+- [x] Read the Participant Guide (2026-10-27): native iOS app is acceptable (public repo + 3-min video + code). Rubric and deadline recorded in `docs/PRD.md`.
 
 ## 10/27–28 — Gate
 
@@ -53,7 +53,7 @@ Full plan (v2, reviewed): `docs/G1_PLAN.md`. Gate = median ≤ 3 cm **and** vali
 | Test | Date | Result | Latency | Cost | Notes |
 |---|---|---|---|---|---|
 | S0.1 | | | | | |
-| S0.2 | 2026-10-27 | **Pass** 5/5 masks on the named object (IMG_5770 also returned 2 lower-confidence false matches) | Spark 4.1–11.5 s (median 6.1 s); SAM 0.5–1.5 s | $0.043 for 5 images (~$0.009 each; Spark ~70%) | Ranked-list prompt; single-main-object prompt gave UNSURE 5/5 on cluttered rooms. Billing delta: _pending_ |
+| S0.2 | 2026-10-27 | **Pass** 5/5 masks on the named object (IMG_5770 also returned 2 lower-confidence false matches) | Spark 4.1–11.5 s (median 6.1 s); SAM 0.5–1.5 s | $0.043 for 5 images (~$0.009 each; Spark ~70%) | Ranked-list prompt; single-main-object prompt gave UNSURE 5/5 on cluttered rooms. Billing: $149.90 left after 21 calls (logged estimate $0.094) |
 | G1 | | | | | |
 | G2 | | | | | |
 | G3 | | | | | |
