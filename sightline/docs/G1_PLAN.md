@@ -37,7 +37,7 @@ The phone is chest-mounted, so nobody can press a button mid-touch. Auto-capture
 Distance = phone to reference. 60 touches, about 20 minutes of device time.
 
 ## Metrics
-Per scenario and overall: median, mean, P90 of 3D error; error split into normal-to-table and in-plane components (the finger's thickness should show as ~1 cm normal bias); **valid localisation rate** = valid estimates / capture attempts.
+Per scenario and overall: median, mean, P90 of 3D error; error split into normal-to-table and in-plane components (the finger's thickness should show as ~1 cm normal bias); **valid localisation rate** = frames with a valid 3D fingertip / frames where Vision saw a hand (≥ 0.5 confidence), while a scenario runs. Per-frame because auto-capture only fires on valid estimates, so failed touches would otherwise never be counted.
 
 **Pass:** overall median ≤ 3 cm **and** valid rate ≥ 80%. Report P90 regardless.
 **Fail →** PRD fallback: guide to within 10 cm, then spoken touch exploration.
