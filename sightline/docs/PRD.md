@@ -35,7 +35,25 @@ Primary: blind and low-vision people. Secondary: older adults with declining sig
 |---|---|---|
 | Muse Spark | Commander: parse, read state, decide, phrase | event-driven, ≤ 1/s |
 | SAM 3.1 | Eyes: find and segment by text, re-confirm | ~1/s |
-| Muse Code | Writes Swift / ARKit code | dev time |
+| Muse Code | Scoped coding tasks (functions, bugs, tests) | dev time |
+
+## Division of labour
+| Who | Owns |
+|---|---|
+| Claude Code / Claude | Main Swift codebase, architecture, code review, docs |
+| Muse Code | Scoped tasks on `muse/<task>` branches, reviewed before merge |
+| Nils | On-device builds and tests, numbers and logs, scope decisions |
+
+## Cost model (zero out-of-pocket)
+All usage bills the $150 hackathon Model API credit; no paid Muse Code plan, no card (or a spend limit < $150).
+
+| Item | Estimate |
+|---|---|
+| One guided grab (SAM ≤ 5 calls, Muse ~10 calls at `reasoning_effort: medium`, 512 px images) | ~$0.05–0.15 |
+| Dev + demo (~300 sessions) | ~$15–45 |
+| Muse Code coding usage | biggest risk; cap ~$15/day, else shift to Claude |
+
+Verify with the Billing delta after the first spike run (see `docs/SPIKE.md`).
 
 ## Competition and differentiation
 Closest: **NaviSense** (Penn State, ASSETS '25) — voice → VLM → LiDAR/AR → hand guidance; and **AIGuide** (ARKit hand guidance). Commercial: Seeing AI Find My Things, Google Lookout Find, Apple Magnifier, Be My AI, Envision Ally Solos, White Cane.
@@ -49,13 +67,13 @@ Sightline's differences:
 Cite NaviSense in the demo and README.
 
 ## MVP scope
-**In:** room scan + labelled baseline map; Action Button / Siri trigger; full find-and-grab flow; new-obstacle detection; speech + distance tones.
+**In:** room scan + labelled baseline map; Action Button (primary) / Siri trigger; full find-and-grab flow; new-obstacle detection; speech + distance tones.
 **Out:** walking navigation, outdoor, external sensors, multi-language, accounts, offline, medical advice.
 
 ## Milestones
 | Date | Milestone |
 |---|---|
-| 10/26 | Spike: device dev mode + ARKit sample; one Muse + SAM call with latency; read official rules |
+| 10/26 | Spike 0 (`docs/SPIKE.md`): ARKit sample on device; Muse + SAM on 5 photos with latency and cost; read official rules |
 | 10/27–28 | **Gate:** hand 3D error ≤ 3 cm; relocalization |
 | 10/29–31 | Core: find + grab |
 | 11/1–2 | Obstacle detection + voice trigger |
@@ -79,10 +97,11 @@ Gate fallbacks: hand error > 3 cm → guide to within 10 cm then prompt touch ex
 | Risk | Mitigation |
 |---|---|
 | Borrowed iPhone time limited | Fixed 2–3 h/day on the Mac; unit-test logic on Mac first |
-| Unfamiliar with Swift / Xcode | Code written by Claude / Muse Code; run Apple's ARKit sample day 1 |
+| Unfamiliar with Swift / Xcode | Code written by Claude Code; run Apple's ARKit sample day 1 |
 | Hand 3D error too large | Measure 10/27–28; fallback above |
 | Relocalization fails | Same-session scan for demo |
 | SAM / Muse latency | Cloud only identifies; guidance is local; "identifying" tone while waiting |
+| Credit burned by coding agent | Claude writes the main code; Muse Code on scoped tasks; daily Billing check |
 | Muse misnames object | Say "not sure"; user can correct by voice |
 | Judges can't run a native app | Check rules; video + repo, TestFlight as backup |
 | Safety liability | Indoor only; not a cane or guide-dog replacement; no walking navigation |
