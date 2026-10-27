@@ -47,15 +47,25 @@ Per scenario and overall: median, mean, P90 of 3D error; error split into normal
 
 `fail_reason`: empty | `no_hand` | `low_hand_conf` | `depth_invalid` | `tracking_limited` | `no_anchor`.
 
-## Files (`sightline/app/`, all `production, needs-review`)
+## Files
 | File | Job |
 |---|---|
-| `Sightline.xcodeproj` | Created by Nils in Xcode (iOS App, SwiftUI, name `Sightline`) |
-| `AR/ARSessionController.swift` | World tracking + `sceneDepth` + image detection; hands frames to the modules below |
-| `Hand/HandPoseDetector.swift` | Vision index-tip + confidence |
-| `Geometry/DepthProjector.swift` | Pure functions: coordinate conversions, depth sampling, unprojection |
-| `Spike/G1MeasureView.swift` | Live distance readout, auto-capture, CSV export (share sheet) |
-| `Tests/DepthProjectorTests.swift` | Swift Testing |
+| `Sightline/Sightline.xcodeproj` | Xcode project (iOS 17+, portrait, camera permission, links SightlineCore) |
+| `Packages/SightlineCore/` | Pure logic, `swift test` on the Mac: `DepthProjector`, `DepthSampler`, `DwellDetector`, `TouchError`, `Stats` |
+| `Sightline/Sightline/AR/FrameProcessor.swift` | Per-frame pipeline on a background queue |
+| `Sightline/Sightline/AR/DepthImageReader.swift` | Copies LiDAR depth + confidence buffers |
+| `Sightline/Sightline/Hand/HandPoseDetector.swift` | Vision index-tip + confidence |
+| `Sightline/Sightline/Spike/G1Model.swift` | Scenarios, jitter check, touch log, CSV |
+| `Sightline/Sightline/Spike/G1MeasureView.swift` | Camera view, green dot = reference, red dot = fingertip, live numbers, CSV share |
+| `tools/make_g1_marker.py` | Generates `g1_marker.png` (app) and `docs/assets/g1_marker_print.pdf` (print) |
+
+## How to run on the iPhone
+1. Print `docs/assets/g1_marker_print.pdf` at **100% / Actual size**. Measure the black square with a ruler (target 100 mm). Tape it flat on a table.
+2. Open `Sightline/Sightline.xcodeproj`, pick the iPhone, ⌘R. Allow camera access.
+3. In the app set **Measured marker width** to your ruler value.
+4. Visual check first: the **green dot** must sit on the crosshair centre, and the **red dot** must follow your index fingertip. If the red dot is offset or mirrored, stop and report (orientation bug).
+5. Pick distance + angle → **Start** → hold still 5 s (jitter check) → touch the crosshair and hold ~0.5 s until the tick → lift → repeat. 10 touches per scenario, then a chime.
+6. Repeat for all 6 scenarios. Tap **CSV** → AirDrop to the Mac → put it in `logs/` and tell Claude.
 
 ## Unit tests (Mac, before any device time)
 - Round trip project → unproject at centre, 4 corners, and edges, at 0.3 / 0.5 / 1.0 m.

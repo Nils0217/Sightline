@@ -45,6 +45,17 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `docs/api-notes.md` | reference, important | Verified Meta Model API request shapes and prices |
 | `docs/G1_PLAN.md` | important, testing, needs-review | G1 hand-accuracy plan v2; awaiting approval |
 | `docs/ARKIT_SAMPLE.md` | testing, reference | How to run Apple's ARKit sample on the iPhone (S0.1) |
+| `docs/assets/g1_marker_print.pdf` | testing, generated | Printable 10 cm G1 marker |
+| `tools/make_g1_marker.py` | testing, needs-review | Generates the G1 marker PNG + PDF |
+| `Packages/SightlineCore/` | production, needs-review, important | Pure geometry / sampling / stats; unit-tested on Mac |
+| `Packages/SightlineCore/Tests/` | testing, needs-review | Swift Testing suites (`swift test`) |
+| `Sightline/Sightline.xcodeproj` | production, config | Xcode project |
+| `Sightline/Sightline/SightlineApp.swift` | production | App entry |
+| `Sightline/Sightline/ContentView.swift` | production, needs-review | Root screen; hosts G1 for now |
+| `Sightline/Sightline/AR/` | production, needs-review, important | ARKit frame pipeline |
+| `Sightline/Sightline/Hand/` | production, needs-review | Vision hand pose |
+| `Sightline/Sightline/Spike/` | production, needs-review | G1 test screen and model (remove from the release build later) |
+| `Sightline/Sightline/g1_marker.png` | testing, generated | G1 reference image bundled in the app |
 | `spike/model_api_spike.py` | spike, needs-review, sensitive | Muse Spark + SAM 3.1 round trip; reads the API key |
 | `spike/requirements.txt` | spike, config | Python deps for the spike |
 | `spike/images/README.md` | spike, testing | Where to put the 5 test photos |
