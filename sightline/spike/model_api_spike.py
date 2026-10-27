@@ -20,7 +20,9 @@ import csv
 import io
 import os
 import re
+import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,7 +50,7 @@ ENV_PATH = ROOT / ".env"
 BASE_URL = "https://api.meta.ai/v1"
 SAM_MODEL = "sam-3.1"
 MAX_EDGE_PX = 512
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}  # no HEIC: Pillow cannot open it
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".heic"}  # HEIC converted with macOS sips
 
 # USD, from https://dev.meta.ai/docs/pricing-rate-limits (2026-10-27).
 SPARK_INPUT_PER_M = 1.25
@@ -85,7 +87,14 @@ def load_api_key() -> str:
 
 def downscale(path: Path) -> Image.Image:
     """Apply EXIF rotation and shrink so the long edge is at most MAX_EDGE_PX."""
-    img = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+    if path.suffix.lower() == ".heic":  # Pillow cannot read HEIC; use the built-in macOS converter
+        with tempfile.TemporaryDirectory() as tmp:
+            jpg = Path(tmp) / "converted.jpg"
+            subprocess.run(["sips", "-s", "format", "jpeg", str(path), "--out", str(jpg)],
+                           check=True, capture_output=True)
+            img = ImageOps.exif_transpose(Image.open(jpg)).convert("RGB")
+    else:
+        img = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
     img.thumbnail((MAX_EDGE_PX, MAX_EDGE_PX))
     return img
 
