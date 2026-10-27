@@ -90,3 +90,10 @@ Rate limits (per team): `muse-spark-1.3` 3000 RPM / 4M TPM; `sam-3.1` 3000 RPM.
 - Reasoning used **755 to over 1024 output tokens** for a one-word answer. With `max_output_tokens=1024`, 3/5 calls hit the cap and `output_text` came back empty. Raised to 2048.
 - Latency **4.6–7.5 s** per Spark call. This alone breaks the G4 target (command → first guidance ≤ 3 s); see the open question in `docs/SPIKE.md`.
 - Cost ≈ $0.004–0.005 per Spark image call, almost all of it reasoning tokens.
+
+2026-10-27, second run (ranked-list prompt, cap 2048):
+- Spark input **360 tokens**; output 849–1970 tokens (reasoning ≈ 99%). Latency 4.1–11.5 s. Raised cap to 4096.
+- SAM 3.1 streamed request worked as documented. Latency **0.5–1.5 s**. `usage` reports 0 tokens (billed per image).
+- `metadata={"include_confidence": "true"}` adds `c=` to both box and mask tokens.
+- One noun can return several objects (ids 0,1,2), **not sorted by confidence**.
+- `meta-sam-parser` 0.1.0 decoded all masks; mask raster is box-local as documented.

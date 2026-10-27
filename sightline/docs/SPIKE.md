@@ -43,14 +43,16 @@ Goal: prove the riskiest paths work before building the full app. Record every n
 
 ## Open questions
 
-- **Spark latency vs. G4 (2026-10-27):** at `reasoning.effort: medium` one image call takes 4.6–7.5 s, over the 3 s budget. Options once S0.2 passes: measure `low` / `minimal` on the same 5 images, or speak an instant local "looking" cue while waiting. AGENTS.md currently mandates `medium`; changing it is Nils's call.
+- **Spark latency vs. G4 (2026-10-27):** at `reasoning.effort: medium` one image call takes 4.1–11.5 s (median 6.1 s), over the 3 s budget. Options once S0.2 passes: measure `low` / `minimal` on the same 5 images, or speak an instant local "looking" cue while waiting. AGENTS.md currently mandates `medium`; changing it is Nils's call.
+
+- **SAM returns every instance that matches the noun (2026-10-27):** "white bottle" matched a water bottle (c=0.69), a hair dryer (0.52) and a toothbrush (~0.5). Records are not sorted by confidence. The app must rank by `c` and disambiguate (Muse or ask the user) before locking a target.
 
 ## Results
 
 | Test | Date | Result | Latency | Cost | Notes |
 |---|---|---|---|---|---|
 | S0.1 | | | | | |
-| S0.2 | | | | | |
+| S0.2 | 2026-10-27 | **Pass** 5/5 masks on the named object (IMG_5770 also returned 2 lower-confidence false matches) | Spark 4.1–11.5 s (median 6.1 s); SAM 0.5–1.5 s | $0.043 for 5 images (~$0.009 each; Spark ~70%) | Ranked-list prompt; single-main-object prompt gave UNSURE 5/5 on cluttered rooms. Billing delta: _pending_ |
 | G1 | | | | | |
 | G2 | | | | | |
 | G3 | | | | | |

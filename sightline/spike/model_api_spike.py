@@ -57,8 +57,9 @@ SPARK_INPUT_PER_M = 1.25
 SPARK_OUTPUT_PER_M = 4.25  # reasoning tokens are billed as output
 SAM_PER_IMAGE = 0.0025
 
-# Reasoning tokens count toward this cap; 1024 left 3/5 answers empty at effort=medium.
-SPARK_MAX_OUTPUT_TOKENS = 2048
+# Reasoning tokens count toward this cap. At effort=medium: 1024 left 3/5 answers empty;
+# 2048 nearly ran out (1970 used) on the list prompt. Worst case at 4096 is ~$0.017 per call.
+SPARK_MAX_OUTPUT_TOKENS = 4096
 
 # Asking for "the single main object" made Spark answer UNSURE on every cluttered room
 # photo (2026-10-27), so ask for a ranked list and segment the first item.
