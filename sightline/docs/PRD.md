@@ -1,3 +1,4 @@
+<!-- labels: important -->
 # Sightline — PRD
 
 _As of 2026-10-26 · Owner: Nils_
@@ -27,14 +28,14 @@ Primary: blind and low-vision people. Secondary: older adults with declining sig
 3. **Trigger:** Action Button (primary) or Siri / Vocal Shortcut via App Intents.
 4. **Command:** Muse Spark reads live state via tool calling; decides target, handles obstacles, rephrases.
 5. **Local loop (30–60 Hz):** ARKit + Vision hand pose → hand-to-target vector → spoken guidance.
-6. **Re-check (~1 Hz):** SAM confirms the target is still there; re-locks if moved.
+6. **Re-check (event-triggered):** SAM confirms the target is still there on target lock, when tracking confidence drops, and once before "now grab"; re-locks if moved. ≤ 5 SAM calls per guidance session.
 7. **Map fills blind spots:** obstacles outside the current view stay in the map to warn about collisions.
 
 ## Meta tools
 | Component | Role | Rate |
 |---|---|---|
 | Muse Spark | Commander: parse, read state, decide, phrase | event-driven, ≤ 1/s |
-| SAM 3.1 | Eyes: find and segment by text, re-confirm | ~1/s |
+| SAM 3.1 | Eyes: find and segment by text, re-confirm | event-triggered, ≤ 5 per session |
 | Muse Code | Scoped coding tasks (functions, bugs, tests) | dev time |
 
 ## Division of labour

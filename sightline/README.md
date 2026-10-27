@@ -1,3 +1,4 @@
+<!-- labels: important -->
 # Sightline
 
 > Built from scratch during the **Meta Global AI Developer Hackathon (Oct 26 – Nov 4, 2026)**, Indie Developer track, theme *Build for Your World*.
@@ -9,7 +10,7 @@ Sightline is an indoor AI guide for blind and low-vision people. Say what you wa
 | Layer | Component | Rate | Job |
 |---|---|---|---|
 | Commander | **Muse Spark** (Meta Model API) | event-driven, ≤ 1 Hz | Parse the request, read live state via tool calling, decide the next step, rephrase guidance |
-| Eyes | **SAM 3.1** (Meta Model API) | ~1 Hz | Find and segment the target by text prompt, re-confirm it is still there |
+| Eyes | **SAM 3.1** (Meta Model API) | event-triggered, ≤ 5 per session | Find and segment the target by text prompt, re-confirm it is still there |
 | Space | ARKit + LiDAR (on device) | 60 Hz | Baseline room map, depth, phone pose |
 | Hand | Apple Vision hand pose (on device) | 30 Hz | 3D fingertip position |
 | Voice | Local controller | real time | Hand-to-target vector → spoken micro-instructions + distance tones |
