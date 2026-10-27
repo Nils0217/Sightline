@@ -1,3 +1,4 @@
+<!-- labels: important, testing -->
 # Spike & validation checklist
 
 Goal: prove the riskiest paths work before building the full app. Record every number in the table at the bottom.
@@ -8,7 +9,7 @@ Goal: prove the riskiest paths work before building the full app. Record every n
 - [ ] iPhone 15 Pro: Settings → General → About → note iOS version
 - [ ] Xcode supports that iOS version (Xcode → Settings → Platforms)
 - [ ] Connect iPhone by USB-C, trust the Mac, enable Settings → Privacy & Security → Developer Mode (restart)
-- [ ] Build and run Apple's sample **"Visualizing and Interacting with a Reconstructed Scene"** on the iPhone
+- [ ] Build and run Apple's sample **"Visualizing and Interacting with a Reconstructed Scene"** on the iPhone — steps in `docs/ARKIT_SAMPLE.md`
 - **Pass:** coloured classified mesh (floor / table / wall) appears on screen
 
 ### S0.2 Model API round trip

@@ -1,3 +1,4 @@
+<!-- labels: important -->
 # AGENTS.md — shared rules for Claude Code, Muse Code and Claude
 
 All agents read this file first. `docs/PRD.md` is the source of truth for scope; `docs/SPIKE.md` is the current task list. If code and PRD disagree, flag it instead of silently picking one.
@@ -35,6 +36,8 @@ Muse Code works on a branch per task (`muse/<task>`); Claude reviews before merg
 - API key from a gitignored `Secrets.xcconfig` / `.env`. Never commit keys.
 - Small commits, message format: `area: what changed` (e.g. `guidance: add distance tones`).
 - Every user-facing string is spoken: short, plain, danger first, say "not sure" instead of guessing.
+- Label every file on its first line (`<!-- labels: ... -->`, `# labels: ...`, `// labels: ...`) and keep `docs/FILE_LABELS.md` in sync. New agent-written code starts as `needs-review`.
+- Never delete files unless Nils says so; mark them `obsolete` instead.
 - Don't guess Meta API request shapes: check https://dev.meta.ai/docs and record the working request in `docs/api-notes.md`.
 
 ## Out of scope (do not build)

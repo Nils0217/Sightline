@@ -1,3 +1,4 @@
+<!-- labels: reference -->
 # Claude Code kickoff prompt — Spike 0
 
 Run from the repo root: `cd ~/Sightline && claude`, then paste everything below the line.
