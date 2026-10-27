@@ -43,6 +43,7 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `docs/CLAUDE_CODE_PROMPT.md` | reference | Kickoff prompt used to start Spike 0 |
 | `docs/FILE_LABELS.md` | important, reference | This file |
 | `docs/api-notes.md` | reference, important | Verified Meta Model API request shapes and prices |
+| `docs/G1_PLAN.md` | important, testing, needs-review | G1 hand-accuracy plan v2; awaiting approval |
 | `docs/ARKIT_SAMPLE.md` | testing, reference | How to run Apple's ARKit sample on the iPhone (S0.1) |
 | `spike/model_api_spike.py` | spike, needs-review, sensitive | Muse Spark + SAM 3.1 round trip; reads the API key |
 | `spike/requirements.txt` | spike, config | Python deps for the spike |

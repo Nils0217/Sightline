@@ -26,6 +26,7 @@ Goal: prove the riskiest paths work before building the full app. Record every n
 ## 10/27–28 — Gate
 
 ### G1 Hand 3D accuracy
+Full plan (v2, reviewed): `docs/G1_PLAN.md`. Gate = median ≤ 3 cm **and** valid rate ≥ 80% over 60 static touches.
 - [ ] Minimal app: ARKit `sceneDepth` + Vision `VNDetectHumanHandPoseRequest`; project index fingertip to world space using the depth map
 - [ ] Place a marker object at a measured position; touch it 10 times; log error
 - **Pass:** median error ≤ 3 cm. **Fail →** guide to within 10 cm, then spoken touch-exploration
