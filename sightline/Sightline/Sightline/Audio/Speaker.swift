@@ -12,7 +12,8 @@ final class Speaker {
         if interrupt { synth.stopSpeaking(at: .immediate) }
         let u = AVSpeechUtterance(string: text)
         u.voice = AVSpeechSynthesisVoice(language: "en-US")
-        u.rate = AVSpeechUtteranceDefaultSpeechRate * 1.1
+        // Slightly slower than default: the first device test found 1.1x too fast.
+        u.rate = AVSpeechUtteranceDefaultSpeechRate * 0.95
         synth.speak(u)
     }
 

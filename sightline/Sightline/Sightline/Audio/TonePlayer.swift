@@ -64,7 +64,7 @@ private nonisolated final class ToneState: @unchecked Sendable {
                 if sinceBeep < Self.beepLength {
                     phase += 2 * .pi * freq * dt
                     if phase > 2 * .pi { phase -= 2 * .pi }
-                    sample = Float(sin(phase)) * 0.3
+                    sample = Float(sin(phase)) * 0.12
                 }
             }
             for buffer in buffers {

@@ -1,8 +1,9 @@
 // labels: production, needs-review, important
 // Find-and-grab session (PRD "Find and grab"):
 //   tap -> listen -> parse noun locally -> say "Looking for the cup" at once -> SAM on the
-//   current frame -> mask + LiDAR -> world target -> 30 Hz hand guidance (speech + tones)
-//   -> "Now grab".
+//   current frame -> mask + LiDAR -> world target -> stop-and-go hand guidance (StepGuide:
+//   one instruction while the hand is still, silent while it moves, "Stop." on arrival)
+//   -> "Grab it" -> local pick-up detection (PickupDetector) -> "Got it." 
 // Muse Spark (tool calling, Find/AgentTools) steps in only off the fast path: commands the local
 // parser cannot read (effort minimal) and several plausible SAM matches (effort medium).
 // Cloud is called only on events (lock, re-lock after tracking recovers); ≤ 5 SAM calls per
@@ -13,11 +14,12 @@ import AVFoundation
 import Foundation
 import Observation
 import SightlineCore
+import UIKit
 
 @Observable
 final class FindModel {
     enum Phase: String {
-        case idle, listening, locating, guiding, done
+        case idle, listening, locating, guiding, grabbing, done
     }
 
     static let maxSAMCalls = 5
@@ -27,6 +29,7 @@ final class FindModel {
     private(set) var target: SIMD3<Float>?
     private(set) var tip: SIMD3<Float>?
     private(set) var handDistance: Float?
+    private(set) var handSource = "-"
     private(set) var lastHeard = ""
     private(set) var lastCue = ""
     private(set) var tracking = "-"
@@ -38,8 +41,10 @@ final class FindModel {
     @ObservationIgnored private let speaker = Speaker()
     @ObservationIgnored private let tones = TonePlayer()
     @ObservationIgnored private let input = SpeechInput()
-    @ObservationIgnored private var guidance = GuidanceController()
-    @ObservationIgnored private var throttle = SpeechThrottle()
+    @ObservationIgnored private var guidance = StepGuide()
+    @ObservationIgnored private var pickup = PickupDetector()
+    @ObservationIgnored private var grabbingSince: Double?
+    @ObservationIgnored private var nudgedToTap = false
     @ObservationIgnored private var lastCamera = matrix_identity_float4x4
     @ObservationIgnored private var sessionStart: Date?
     @ObservationIgnored private var wasTrackingLimited = false
@@ -84,6 +89,8 @@ final class FindModel {
         switch phase {
         case .idle, .done:
             listen()
+        case .grabbing:
+            finish(spoken: "Great. Done.", event: "done_tap")
         case .guiding, .locating:
             finish(spoken: "Stopped.", event: "stop")
         case .listening:
@@ -120,8 +127,11 @@ final class FindModel {
         target = nil
         candidates = []
         samCalls = 0
-        guidance = GuidanceController()
-        throttle = SpeechThrottle()
+        guidance = StepGuide()
+        pickup = PickupDetector()
+        grabbingSince = nil
+        nudgedToTap = false
+        processor.target = nil
         sessionStart = Date()
         phase = .locating
     }
@@ -151,7 +161,13 @@ final class FindModel {
     struct Candidate: Sendable {
         var info: AgentCandidate
         var world: SIMD3<Float>
+        /// SAM box on the uploaded image (pixels), for the verification crop.
+        var box: CGRect
     }
+
+    /// Below this SAM confidence, Spark checks the crop before we trust it (the first device test
+    /// locked a power bank for "phone" in a room with no phone).
+    static let verifyBelow: Float = 0.75
 
     /// One SAM call on the current frame -> up to 4 candidates in 3D, most confident first.
     private func segment(_ noun: String) async -> Result<[Candidate], FindError> {
@@ -191,7 +207,8 @@ final class FindModel {
                                       offset: BodyOffset(from: camera, to: world, cameraTransform: t),
                                       widthFraction: Float(r.right - r.left) / Float(r.sourceWidth),
                                       heightFraction: Float(r.bottom - r.top) / Float(r.sourceHeight))
-            return Candidate(info: info, world: world)
+            return Candidate(info: info, world: world,
+                             box: CGRect(x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top))
         }
     }
 
@@ -212,14 +229,40 @@ final class FindModel {
                 await runAgent(prompt: "The user said: \"\(lastHeard)\". SAM found several \(noun) candidates "
                                + "(call get_state; the photo is what the chest camera sees). Select the one they mean, or ask them.",
                                jpeg: lastJPEG, effort: .medium)
+            } else if list[0].info.confidence < Self.verifyBelow {
+                speaker.say("Checking.")
+                let ok = await verify(noun: noun, candidate: list[0])
+                guard id == sessionID, phase == .locating else { return }
+                log("verify", "c \(list[0].info.confidence) -> \(ok.map { $0 ? "yes" : "no" } ?? "error")")
+                if ok == false {
+                    phase = .idle
+                    speaker.say("I can't see the \(noun). Turn slowly, then tap and ask again.", interrupt: true)
+                } else {
+                    select(list[0])
+                }
             } else {
                 select(list[0])
             }
         }
     }
 
+    /// Muse Spark (minimal) yes/no on a crop around the SAM box. nil = could not check.
+    private func verify(noun: String, candidate c: Candidate) async -> Bool? {
+        guard let jpeg = lastJPEG, let crop = Self.crop(jpeg, to: c.box, margin: 0.3) else { return nil }
+        return try? await MuseAgent.verify(noun: noun, jpeg: crop, label: "verify_\(sessionID)")
+    }
+
+    nonisolated static func crop(_ jpeg: Data, to box: CGRect, margin: CGFloat) -> Data? {
+        guard let image = UIImage(data: jpeg)?.cgImage else { return nil }
+        let bounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        let rect = box.insetBy(dx: -box.width * margin, dy: -box.height * margin).intersection(bounds).integral
+        guard !rect.isEmpty, let cropped = image.cropping(to: rect) else { return nil }
+        return UIImage(cgImage: cropped).jpegData(compressionQuality: 0.85)
+    }
+
     private func select(_ c: Candidate, intro: String? = nil) {
         target = c.world
+        processor.target = c.world
         phase = .guiding
         log("target", "id \(c.info.id) c \(c.info.confidence)")
         let whereIs = GuidanceController.describe(target: c.world, cameraTransform: lastCamera, name: targetName ?? "object")
@@ -240,7 +283,10 @@ final class FindModel {
             }
             let moved = simd_distance(nearest.world, current)
             log("sam_relock", String(format: "moved %.1f cm", moved * 100))
-            if moved < 0.3 { target = nearest.world }
+            if moved < 0.3 {
+                target = nearest.world
+                processor.target = nearest.world
+            }
         }
     }
 
@@ -347,36 +393,56 @@ final class FindModel {
         tracking = f.tracking
         lastCamera = f.cameraTransform
         tip = f.tip
+        handSource = f.tip == nil ? "-" : f.handSource
         if f.tracking != "normal" { wasTrackingLimited = true }
-        guard phase == .guiding, let target, let name = targetName else {
+        guard phase == .guiding || phase == .grabbing, let target else {
             handDistance = nil
             return
         }
         // Re-lock once tracking recovers (PRD: re-check when tracking confidence drops).
-        if wasTrackingLimited && f.tracking == "normal" {
+        if phase == .guiding && wasTrackingLimited && f.tracking == "normal" {
             wasTrackingLimited = false
             relock()
         }
         let offset = f.tip.map { BodyOffset(from: $0, to: target, cameraTransform: f.cameraTransform) }
         handDistance = offset?.length
-        tones.update(distance: offset?.length)
-        guard let cue = guidance.update(time: f.time, offset: offset, targetName: name) else { return }
-        if throttle.shouldSpeak(cue, time: f.time, speaking: speaker.isSpeaking) {
-            lastCue = cue.phrase
-            log("cue", cue.phrase, distance: offset?.length)
-            if cue.kind == .grab {
-                finish(spoken: cue.phrase, event: "grab")
-            } else {
-                speaker.say(cue.phrase)
+
+        if pickup.update(time: f.time, depthDelta: f.targetDepthDelta, handDistance: offset?.length) {
+            finish(spoken: "Got it. Well done.", event: "pickup")
+            return
+        }
+        if phase == .grabbing {
+            tones.update(distance: nil)
+            let since = grabbingSince ?? f.time
+            grabbingSince = since
+            if !nudgedToTap && f.time - since > 8 {
+                nudgedToTap = true
+                speaker.say("Tap the screen when you have it.")
+                log("nudge_tap", "")
             }
+            return
+        }
+        tones.update(distance: offset?.length)
+        guard let cue = guidance.update(time: f.time, offset: offset) else { return }
+        // "Stop." and "Grab it" cut in; instructions wait for silence.
+        let urgent = cue.kind == .stop || cue.kind == .grab
+        guard urgent || !speaker.isSpeaking else { return }
+        lastCue = cue.phrase
+        log("cue", cue.phrase, distance: offset?.length)
+        speaker.say(cue.phrase, interrupt: urgent)
+        if cue.kind == .grab {
+            phase = .grabbing
+            grabbingSince = f.time
+            tones.update(distance: nil)
         }
     }
 
     private func finish(spoken: String, event: String) {
         tones.stop()
+        processor.target = nil
         speaker.say(spoken, interrupt: true)
         log(event, spoken, distance: handDistance)
-        phase = event == "grab" ? .done : .idle
+        phase = ["pickup", "done_tap"].contains(event) ? .done : .idle
     }
 
     // MARK: Log
@@ -406,20 +472,60 @@ nonisolated struct FindFrame: Sendable {
     var tracking: String
     var cameraTransform: simd_float4x4
     var tip: SIMD3<Float>?
+    var handSource: String
+    /// LiDAR depth at the target's pixel minus the target's own depth; > 0 = something farther
+    /// is visible there now (object lifted away). nil when the target is off-screen or unreadable.
+    var targetDepthDelta: Float?
 }
 
 /// Runs the fingertip pipeline on every second frame (~30 Hz) off the main thread.
 nonisolated final class FindFrameProcessor: NSObject, ARSessionDelegate, @unchecked Sendable {
     let queue = DispatchQueue(label: "sightline.find.frames", qos: .userInteractive)
     var onFrame: (@Sendable (FindFrame) -> Void)?
-    private let locator = FingertipLocator()
+    private let locator: FingertipLocator = {
+        var l = FingertipLocator()
+        l.allowCentreFallback = true  // the index tip hides behind the palm while grasping
+        return l
+    }()
     private var frameCount = 0
+
+    // Written from the main actor, read on `queue`.
+    private let lock = NSLock()
+    private var _target: SIMD3<Float>?
+    var target: SIMD3<Float>? {
+        get { lock.withLock { _target } }
+        set { lock.withLock { _target = newValue } }
+    }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         frameCount += 1
         guard frameCount % 2 == 0 else { return }
         let r = locator.locate(in: frame)
         onFrame?(FindFrame(time: frame.timestamp, tracking: FrameProcessor.describe(frame.camera.trackingState),
-                           cameraTransform: frame.camera.transform, tip: r.tip))
+                           cameraTransform: frame.camera.transform, tip: r.tip, handSource: r.source,
+                           targetDepthDelta: target.flatMap { depthDelta(at: $0, frame: frame) }))
+    }
+
+    /// Median LiDAR depth (medium+ confidence) in a 5x5 window at the target's pixel, minus the target's depth.
+    private func depthDelta(at target: SIMD3<Float>, frame: ARFrame) -> Float? {
+        guard let data = frame.sceneDepth, let depth = DepthImageReader.read(data) else { return nil }
+        let t = frame.camera.transform
+        let c = DepthProjector.camera(fromWorld: target, cameraTransform: t)
+        let rawSize = SIMD2(Float(frame.camera.imageResolution.width), Float(frame.camera.imageResolution.height))
+        let k = CameraIntrinsics(matrix: frame.camera.intrinsics, imageSize: rawSize)
+            .scaled(to: SIMD2(Float(depth.width), Float(depth.height)))
+        guard let p = DepthProjector.project(cameraPoint: c, intrinsics: k) else { return nil }
+        let cx = Int(p.x.rounded()), cy = Int(p.y.rounded())
+        var values: [Float] = []
+        for y in (cy - 2)...(cy + 2) where y >= 0 && y < depth.height {
+            for x in (cx - 2)...(cx + 2) where x >= 0 && x < depth.width {
+                let i = y * depth.width + x
+                let d = depth.depth[i]
+                guard d.isFinite, d > 0, (depth.confidence?[i] ?? 2) >= 1 else { continue }
+                values.append(d)
+            }
+        }
+        guard values.count >= 8, let median = Stats.median(values) else { return nil }
+        return median - (-c.z)
     }
 }

@@ -7,6 +7,8 @@ import ARKit
 import SightlineCore
 
 nonisolated struct FingertipResult: Sendable {
+    /// "index_tip" or "hand_centre" (fallback, find flow only).
+    var source = "index_tip"
     var handConfidence: Float?
     /// Vision index tip, normalized portrait coordinates (origin bottom-left).
     var visionTip: SIMD2<Float>?
@@ -23,16 +25,28 @@ nonisolated struct FingertipLocator {
 
     private let hand = HandPoseDetector()
     private let sampler = DepthSampler()
+    /// G1 measures the index tip only; the find flow falls back to the whole-hand centre.
+    var allowCentreFallback = false
 
     func locate(in frame: ARFrame) -> FingertipResult {
         var r = FingertipResult()
-        guard let tip = hand.indexTip(in: frame.capturedImage, orientation: .right) else {
+        guard let points = hand.hand(in: frame.capturedImage, orientation: .right) else {
+            r.failReason = "no_hand"
+            return r
+        }
+        var chosen = points.indexTip
+        if allowCentreFallback, (chosen?.confidence ?? 0) < Self.minHandConfidence,
+           let centre = points.centre, centre.confidence >= 0.3 {
+            chosen = centre
+            r.source = "hand_centre"
+        }
+        guard let tip = chosen else {
             r.failReason = "no_hand"
             return r
         }
         r.handConfidence = tip.confidence
         r.visionTip = tip.point
-        guard tip.confidence >= Self.minHandConfidence else {
+        guard tip.confidence >= Self.minHandConfidence || r.source == "hand_centre" else {
             r.failReason = "low_hand_conf"
             return r
         }

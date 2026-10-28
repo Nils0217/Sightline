@@ -9,8 +9,11 @@ First end-to-end version of the core flow (PRD "Find and grab"). Goal of this ru
 3. The app says **"Looking for the cup."** at once, before any cloud call (G4 decision).
 4. SAM 3.1 segments "cup" on the current frame → mask + LiDAR → world target (same code as G2). Green dot = target.
 5. It says where it is: "Found the cup, about 40 centimetres ahead, slightly right. Reach out slowly."
-6. ~30 Hz loop: fingertip (G1 pipeline, red dot) → offset in the body frame → one short cue at a time ("Left, 10 centimetres.", "A little higher.", "Forward, 20 centimetres.") plus beeps that get faster and higher as the finger gets closer (silent beyond 60 cm).
-7. Fingertip within 4 cm of the target for 0.3 s → **"Now grab."** Done.
+6. **Stop-and-go guidance (v2):** when your hand is still, one instruction ("Right, about 20 centimetres."). While you move: **silence** (soft beeps only within 40 cm). When you reach that point: **"Stop."** Hold still → the next instruction. Hand point = index tip, or the whole hand when the tip is hidden (red dot).
+7. Hand within 6 cm of the object → **"Stop. It's at your hand. Grab it."**
+8. **Done** when you lift the object away (the phone sees the table where it was) → "Got it. Well done." Or tap the screen → "Great. Done." After 8 s without either it says "Tap the screen when you have it." once.
+- If SAM is not confident (< 0.75), the app says "Checking." and asks Spark yes/no on a crop before guiding. A "no" means "I can't see the phone."
+- "I can't see your hand" comes only after 2.5 s without a hand, and at most every 10 s.
 - Tap again while guiding = "Stopped." Saying "stop" works too.
 - If tracking drops and recovers, SAM is called once more to re-lock. Max 5 SAM calls per search.
 - The noun comes from your words, so the fast path never waits on Muse Spark.
@@ -26,7 +29,7 @@ Directions assume the phone faces forward from the chest: "right" is your right,
 - `api_calls.csv` — shared by all launches, appended forever (also gets the G2 calls).
 - `g2/` is not used by Find.
 
-Log columns: `timestamp, session, elapsed_s, event, target, detail, hand_to_target_cm, sam_calls, tracking_state`. Events: `command`, `command_agent`, `sam_lock`, `sam_lock_fail`, `target`, `sam_relock`, `cue`, `grab`, `stop`, `agent_tool`, `agent_answer`, `agent_text`, `agent_stop`, `agent_error`.
+Log columns: `timestamp, session, elapsed_s, event, target, detail, hand_to_target_cm, sam_calls, tracking_state`. Events: `command`, `verify`, `nudge_tap`, `pickup`, `done_tap`, `command_agent`, `sam_lock`, `sam_lock_fail`, `target`, `sam_relock`, `cue`, `grab`, `stop`, `agent_tool`, `agent_answer`, `agent_text`, `agent_stop`, `agent_error`.
 
 ## How to run
 0. On the Mac first (1 minute, a few cents): `.venv/bin/python spike/agent_spike.py` with the key exported. It runs the same tool-calling requests with fake tools and prints each call, so request-shape problems show up here instead of on the phone. Paste me the output.

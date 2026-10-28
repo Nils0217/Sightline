@@ -51,6 +51,42 @@ nonisolated enum MuseAgent {
         ["type": "function_call", "call_id": c.callID, "name": c.name, "arguments": c.arguments]
     }
 
+    /// Yes/no check: is the object in this crop a `noun`? Effort minimal (fast path). nil = unclear answer.
+    static func verify(noun: String, jpeg: Data, label: String) async throws -> Bool? {
+        let prompt = "A blind user asked for: \(noun). Is the main object in the middle of this photo a \(noun)? "
+            + "Answer with one word: yes or no."
+        guard let key = APIKey.value else { throw MetaAPIError.missingKey }
+        let body: [String: Any] = [
+            "model": model,
+            "input": userMessage(prompt, jpeg: jpeg),
+            "reasoning": ["effort": Effort.minimal.rawValue],
+            "max_output_tokens": Effort.minimal.maxOutputTokens,
+        ]
+        var request = URLRequest(url: MetaAPI.baseURL.appendingPathComponent("responses"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.timeoutInterval = 20
+        let start = Date()
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        let usage = json["usage"] as? [String: Any]
+        let inTok = usage?["input_tokens"] as? Int ?? 0, outTok = usage?["output_tokens"] as? Int ?? 0
+        ApiCallLog.append(image: label, model: "\(model)/minimal", noun: noun, latencyMS: Date().timeIntervalSince(start) * 1000,
+                          cost: Double(inTok) / 1e6 * inputPerM + Double(outTok) / 1e6 * outputPerM,
+                          inputTokens: inTok, outputTokens: outTok)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        var text = ""
+        for item in json["output"] as? [[String: Any]] ?? [] where item["type"] as? String == "message" {
+            for part in item["content"] as? [[String: Any]] ?? [] { text += part["text"] as? String ?? "" }
+        }
+        let answer = text.lowercased()
+        if answer.contains("yes") { return true }
+        if answer.contains("no") { return false }
+        return nil
+    }
+
     static func respond(history: [[String: Any]], effort: Effort, label: String) async throws -> SparkTurn {
         guard let key = APIKey.value else { throw MetaAPIError.missingKey }
         let body: [String: Any] = [

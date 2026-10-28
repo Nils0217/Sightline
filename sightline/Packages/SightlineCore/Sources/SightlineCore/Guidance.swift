@@ -36,13 +36,15 @@ public struct BodyOffset: Sendable, Equatable {
 /// What the guidance loop wants to say. `key` identifies the instruction for de-duplication.
 public struct GuidanceCue: Sendable, Equatable {
     public enum Kind: String, Sendable {
-        case noHand, move, grab
+        case noHand, move, stop, grab
     }
     public var kind: Kind
     public var phrase: String
     public var key: String
 }
 
+/// Continuous cues, one per correction. **Obsolete for the find flow** since the 2026-10-28 device
+/// test (too talkative); FindModel uses `StepGuide`. Kept for `describe`, `rounded` and tests.
 public struct GuidanceController: Sendable {
     /// Inside this 3D distance the hand counts as at the object.
     public var grabRadius: Float = 0.04
@@ -133,7 +135,7 @@ public struct SpeechThrottle: Sendable {
 
     public mutating func shouldSpeak(_ cue: GuidanceCue, time: Double, speaking: Bool) -> Bool {
         // "Now grab" interrupts anything.
-        if cue.kind == .grab { return commit(cue, time) }
+        if cue.kind == .grab || cue.kind == .stop { return commit(cue, time) }
         if speaking { return false }
         if let last = lastTime {
             if time - last < minInterval { return false }
@@ -150,18 +152,21 @@ public struct SpeechThrottle: Sendable {
     }
 }
 
-/// Parking-sensor style tones: closer = faster and higher.
+/// Parking-sensor style tones: closer = faster and higher. Only near the object.
 public enum ProximityTone {
     /// Seconds between beeps for a hand-to-target distance in metres; nil = silent (too far).
     public static func interval(distance: Float) -> Double? {
-        guard distance <= 0.6 else { return nil }
+        guard distance <= maxDistance else { return nil }
         let d = Double(max(distance, 0.04))
-        return 0.08 + (d - 0.04) / (0.6 - 0.04) * (0.7 - 0.08)
+        return 0.1 + (d - 0.04) / (Double(maxDistance) - 0.04) * (0.8 - 0.1)
     }
 
-    /// Hz, 880 at the object down to 440 at 60 cm.
+    /// Hz, 880 at the object down to 440 at `maxDistance`.
     public static func frequency(distance: Float) -> Double {
-        let d = Double(min(max(distance, 0.04), 0.6))
-        return 880 - (d - 0.04) / (0.6 - 0.04) * 440
+        let d = Double(min(max(distance, 0.04), maxDistance))
+        return 880 - (d - 0.04) / (Double(maxDistance) - 0.04) * 440
     }
+
+    /// Silent beyond this (m). Was 0.6; lowered after "too noisy" (2026-10-28).
+    public static let maxDistance: Float = 0.4
 }

@@ -26,6 +26,7 @@ struct FindView: View {
         switch model.phase {
         case .idle, .done: "Speak a command"
         case .listening: "Listening"
+        case .grabbing: "Done, I have it"
         case .locating, .guiding: "Stop"
         }
     }
@@ -35,7 +36,7 @@ struct FindView: View {
             Text(headline).font(.title3.bold())
             Text("heard \"\(model.lastHeard)\"")
             Text("target \(model.targetName ?? "-")  SAM \(model.samCalls)/\(FindModel.maxSAMCalls)  tracking \(model.tracking)")
-            Text("hand→target \(model.handDistance.map { String(format: "%.1f cm", $0 * 100) } ?? "-")  cue \(model.lastCue)")
+            Text("hand→target \(model.handDistance.map { String(format: "%.1f cm", $0 * 100) } ?? "-") (\(model.handSource))  cue \(model.lastCue)")
             if let url = model.logURL {
                 ShareLink("Log CSV", item: url).font(.caption.bold()).allowsHitTesting(true)
             }
@@ -54,6 +55,7 @@ struct FindView: View {
         case .listening: "Listening…"
         case .locating: "Looking for the \(model.targetName ?? "object")…"
         case .guiding: "Guiding to the \(model.targetName ?? "object")"
+        case .grabbing: "Grab it — tap when you have it"
         case .done: "Done. Tap for a new search"
         }
     }

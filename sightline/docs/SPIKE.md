@@ -65,7 +65,7 @@ Full plan and run steps: `docs/G3_PLAN.md`.
 | S0.2 | 2026-10-27 | **Pass** 5/5 masks on the named object (IMG_5770 also returned 2 lower-confidence false matches) | Spark 4.1–11.5 s (median 6.1 s); SAM 0.5–1.5 s | $0.043 for 5 images (~$0.009 each; Spark ~70%) | Ranked-list prompt; single-main-object prompt gave UNSURE 5/5 on cluttered rooms. Billing: $149.90 left after 21 calls (logged estimate $0.094) |
 | G1 | 2026-10-27 | **Pass.** 60 touches over 6 scenarios: median 1.43 cm, mean 1.24, P90 1.96, max 7.08; valid rate 91–100% per scenario | – | – | See "G1 per-scenario results" below. Distance in the scenario name is the phone *height*, not the camera→tip range. |
 | G2 | 2026-10-28 | **Pass.** Book on a table; 4 re-measures over 88 s from 4 viewpoints (range 0.69–1.23 m, camera moved up to ~1.5 m): distance to first lock 1.01, 1.08, 0.99, 0.78 cm (max 1.08 cm, gate 3 cm). Return-to-start drift 0.78 cm | SAM 0.7–2.6 s (median 1.6 s) | 5 × $0.0025 | See "G2 results" below |
-| G3 | | | | | |
+| G3 | 2026-10-28 | **Pass.** Relocalized 1.82 s after a full app restart (gate 10 s) | – | – | Map 10.2 MB, 85 anchors, saved at `mapped`. Source: `logs/g3_relocalize_1793208798.csv` (save) and `_1793208947.csv` (load). Lighting/start position unchanged; harder variants not run. |
 | G4 | 2026-10-28 | **Spark part measured; end-to-end not yet.** Spark median 6.1 s (medium) → 4.0 s (low) → **2.0 s (minimal)** on the same 5 images | see below | per call: medium ~$0.0068, low ~$0.0034, minimal ~$0.0014 | Effort for the app = Nils's call |
 
 ### G1 per-scenario results (2026-10-27)
@@ -125,7 +125,12 @@ Findings:
 ## 10/28– — Core: find and grab
 
 - [x] v1 flow (`docs/FIND_TEST.md`): on-device speech → local noun parse → instant "Looking for…" → SAM lock → 30 Hz hand guidance (speech + tones) → "Now grab". Unit-tested logic in `SightlineCore` (`Command`, `Guidance`).
-- [ ] Device run v1 (Nils)
+- [x] Device run v1 (Nils, 2026-10-28) → **failed**, findings:
+  1. Far too talkative: fast speech, centimetre updates while the hand moved. Nils wants stop-and-go: one instruction, silence while moving, "stop" at the point, then the next step.
+  2. Index tip only: when the palm or other fingers hid it, "Hold your hand out in front of you" repeated although the hand was there; no way to tell the object was already in hand.
+  3. Asked for "phone" in a view without a phone → locked a power bank. With a phone in view it locked correctly, but never detected that the grab was done.
+- [x] v2 fixes: `StepGuide` stop-and-go; slower speech; quieter tones only within 40 cm; whole-hand fallback point when the index tip is hidden; "can't see your hand" after 2.5 s and at most every 10 s; local pick-up detection (`PickupDetector`: target pixel depth jumps farther after the hand was near) + tap = done; Spark yes/no check on a crop when SAM confidence < 0.75.
+- [ ] Device run v2 (Nils)
 - [x] Muse Spark as commander (tool calling: `get_state`, `find_object`, `select_target`, `say`, `ask_user`, `stop`): unparsed commands (minimal) and several close SAM matches (medium). Targets the Best Agentic Use-Case prize.
 - [x] Verify the tool-calling shape live (2026-10-28): works; switched to resending history (previous_response_id turns were 9–30 s), state in the first message, `select_target` carries the spoken sentence. See docs/api-notes.md.
 - [ ] Pre-grab SAM confirm (PRD step 6) — deferred: the reaching hand occludes the object; decide after v1 test.

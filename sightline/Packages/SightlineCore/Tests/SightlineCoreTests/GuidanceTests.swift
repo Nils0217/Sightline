@@ -114,9 +114,9 @@ import Testing
     }
 
     @Test func tones() {
-        #expect(ProximityTone.interval(distance: 0.7) == nil)
+        #expect(ProximityTone.interval(distance: 0.5) == nil)
         #expect(ProximityTone.interval(distance: 0.04)! < ProximityTone.interval(distance: 0.3)!)
         #expect(abs(ProximityTone.frequency(distance: 0.04) - 880) < 0.01)
-        #expect(abs(ProximityTone.frequency(distance: 0.6) - 440) < 0.01)
+        #expect(abs(ProximityTone.frequency(distance: 0.4) - 440) < 0.01)
     }
 }
