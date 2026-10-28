@@ -96,10 +96,12 @@ nonisolated enum ApiCallLog {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("api_calls.csv")
     }
 
-    static func append(image: String, model: String, noun: String, latencyMS: Double, cost: Double) {
+    static func append(image: String, model: String, noun: String, latencyMS: Double, cost: Double,
+                       inputTokens: Int? = nil, outputTokens: Int? = nil) {
         lock.withLock {
             let row = [ISO8601DateFormatter().string(from: Date()), image, model, noun.replacingOccurrences(of: ",", with: " "),
-                       String(format: "%.0f", latencyMS), "", "", String(format: "%.4f", cost)].joined(separator: ",")
+                       String(format: "%.0f", latencyMS), inputTokens.map(String.init) ?? "", outputTokens.map(String.init) ?? "",
+                       String(format: "%.6f", cost)].joined(separator: ",")
             let fm = FileManager.default
             if !fm.fileExists(atPath: url.path) {
                 try? (header + "\n").write(to: url, atomically: true, encoding: .utf8)

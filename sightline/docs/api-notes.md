@@ -103,3 +103,10 @@ Rate limits (per team): `muse-spark-1.3` 3000 RPM / 4M TPM; `sam-3.1` 3000 RPM.
 - Post-training exists only for the **open-weight** models, self-hosted with TorchTitan (SFT on own text/image/audio conversations, or RL with GRPO): https://dev.meta.ai/docs/cookbook/post-training
   - Muse Spark Open: 816B MoE, 42B active. Muse Glimmer: 30B, "built for local and edge deployment". Both need your own GPUs; not covered by the Model API credit. https://dev.meta.ai/docs/open-weight-models
 - For accuracy at `minimal` effort use the levers the hosted API has: tighter prompts with a few examples, structured output (https://dev.meta.ai/docs/structured-output), prompt caching for the fixed prefix ($0.15 / 1M cached input), and on-device context (the user's spoken noun) so the model has less to infer.
+
+## Muse Spark tool calling (from https://dev.meta.ai/docs/tool-calling, 2026-10-28; not yet confirmed live)
+- `tools`: flat `{"type":"function","name","description","parameters":{JSON Schema, "type":"object"}}`; optional `strict`.
+- Output items with `type: "function_call"`: `name`, `arguments` (JSON string), `call_id`.
+- Return results with a new request: `input` = `[{"type":"function_call_output","call_id","output": "<string>"}]`, `previous_response_id` = the previous response's `id`, same `tools`.
+- `tool_choice`: only `"auto"` (others → HTTP 400), so handle plain-text replies too. `parallel_tool_calls: false` = at most one call per turn.
+- Used by `Sightline/Sightline/API/MuseAgent.swift`; smoke test `spike/agent_spike.py`.

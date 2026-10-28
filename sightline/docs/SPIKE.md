@@ -126,6 +126,7 @@ Findings:
 
 - [x] v1 flow (`docs/FIND_TEST.md`): on-device speech → local noun parse → instant "Looking for…" → SAM lock → 30 Hz hand guidance (speech + tones) → "Now grab". Unit-tested logic in `SightlineCore` (`Command`, `Guidance`).
 - [ ] Device run v1 (Nils)
-- [ ] Muse Spark as commander (tool calling, `get_state()`): choose among several SAM instances, handle unparsed commands, rephrase. Targets the Best Agentic Use-Case prize.
+- [x] Muse Spark as commander (tool calling: `get_state`, `find_object`, `select_target`, `say`, `ask_user`, `stop`): unparsed commands (minimal) and several close SAM matches (medium). Targets the Best Agentic Use-Case prize.
+- [ ] Verify the tool-calling shape live: `spike/agent_spike.py` (Nils)
 - [ ] Pre-grab SAM confirm (PRD step 6) — deferred: the reaching hand occludes the object; decide after v1 test.
 - [ ] Action Button / App Intents trigger

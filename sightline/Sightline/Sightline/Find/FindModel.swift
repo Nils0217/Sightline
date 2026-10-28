@@ -3,6 +3,8 @@
 //   tap -> listen -> parse noun locally -> say "Looking for the cup" at once -> SAM on the
 //   current frame -> mask + LiDAR -> world target -> 30 Hz hand guidance (speech + tones)
 //   -> "Now grab".
+// Muse Spark (tool calling, Find/AgentTools) steps in only off the fast path: commands the local
+// parser cannot read (effort minimal) and several plausible SAM matches (effort medium).
 // Cloud is called only on events (lock, re-lock after tracking recovers); ≤ 5 SAM calls per
 // find session. The guidance loop never waits on the network.
 
@@ -43,6 +45,8 @@ final class FindModel {
     @ObservationIgnored private var wasTrackingLimited = false
     @ObservationIgnored private var logRows: [String] = []
     @ObservationIgnored private var sessionID = 0
+    @ObservationIgnored private var candidates: [Candidate] = []
+    @ObservationIgnored private var lastJPEG: Data?
 
     init() {
         processor.onFrame = { [weak self] f in
@@ -101,84 +105,241 @@ final class FindModel {
                 startFind(noun)
             case .stop:
                 finish(spoken: "Stopped.", event: "stop")
-            case nil:
+            case nil where heard.isEmpty:
                 phase = .idle
-                speaker.say(heard.isEmpty ? "I didn't hear anything. Tap and try again."
-                                          : "Sorry. Say for example: find the cup.")
-                log("unparsed", heard)
+                speaker.say("I didn't hear anything. Tap and try again.")
+            case nil:
+                startAgent(heard: heard)
             }
         }
     }
 
-    private func startFind(_ noun: String) {
+    private func beginSession(name: String?) {
         sessionID += 1
-        targetName = noun
+        targetName = name
         target = nil
+        candidates = []
         samCalls = 0
         guidance = GuidanceController()
         throttle = SpeechThrottle()
         sessionStart = Date()
+        phase = .locating
+    }
+
+    private func startFind(_ noun: String) {
+        beginSession(name: noun)
         log("command", noun)
         // Instant local cue (G4): the user hears something before any network call.
         speaker.say("Looking for the \(noun).")
-        locate(reason: "lock")
+        Task { await lock(noun: noun) }
+    }
+
+    /// The local parser could not read the command ("I'm thirsty"): Muse Spark (minimal) decides.
+    private func startAgent(heard: String) {
+        beginSession(name: nil)
+        log("command_agent", heard)
+        speaker.say("One moment.")
+        Task {
+            await runAgent(prompt: "The user said: \"\(heard)\". Work out which object they want, find it and select it. "
+                           + "If it is not a request to find an object, say so briefly and stop.",
+                           jpeg: nil, effort: .minimal)
+        }
     }
 
     // MARK: Cloud (event-triggered)
 
-    private func locate(reason: String) {
-        guard let noun = targetName else { return }
-        guard samCalls < Self.maxSAMCalls else {
-            finish(spoken: "I couldn't find the \(noun). Let's stop here.", event: "budget")
-            return
+    struct Candidate: Sendable {
+        var info: AgentCandidate
+        var world: SIMD3<Float>
+    }
+
+    /// One SAM call on the current frame -> up to 4 candidates in 3D, most confident first.
+    private func segment(_ noun: String) async -> Result<[Candidate], FindError> {
+        guard samCalls < Self.maxSAMCalls else { return .failure(FindError("budget")) }
+        var snapshot: FrameSnapshot?
+        for _ in 0..<10 {
+            if let frame = session.currentFrame, let s = try? FrameSnapshot.make(from: frame, tracking: tracking) {
+                snapshot = s
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(200))
         }
-        guard let frame = session.currentFrame,
-              let snapshot = try? FrameSnapshot.make(from: frame, tracking: tracking) else {
-            Task { try? await Task.sleep(for: .milliseconds(300)); locate(reason: reason) }
-            return
-        }
-        if reason == "lock" { phase = .locating }
+        guard let s = snapshot else { return .failure(FindError("no_frame")) }
         samCalls += 1
+        lastJPEG = s.jpeg
+        do {
+            let response = try await MetaAPI.segment(noun: noun, jpeg: s.jpeg, imageLabel: "find_\(sessionID)_\(samCalls)")
+            let list = Self.candidates(from: response.text, snapshot: s)
+            return list.isEmpty ? .failure(FindError("no_object")) : .success(list)
+        } catch {
+            return .failure(FindError("api_error"))
+        }
+    }
+
+    nonisolated static func candidates(from text: String, snapshot s: FrameSnapshot) -> [Candidate] {
+        let t = s.cameraTransform
+        let camera = SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z)
+        // SAM returns every instance, unsorted.
+        let records = SAMParser.parse(text).filter { ($0.confidence ?? 1) >= 0.3 }
+            .sorted { ($0.confidence ?? 0) > ($1.confidence ?? 0) }.prefix(4)
+        return records.compactMap { r in
+            guard let raster = try? r.decodeMask(),
+                  case .success(let hit) = MaskTarget.locate(mask: SourceMask(record: r, raster: raster),
+                                                             depth: s.depth, intrinsics: s.intrinsics) else { return nil }
+            let world = DepthProjector.world(fromCamera: hit.cameraPoint, cameraTransform: t)
+            let info = AgentCandidate(id: r.id, confidence: r.confidence ?? 0,
+                                      offset: BodyOffset(from: camera, to: world, cameraTransform: t),
+                                      widthFraction: Float(r.right - r.left) / Float(r.sourceWidth),
+                                      heightFraction: Float(r.bottom - r.top) / Float(r.sourceHeight))
+            return Candidate(info: info, world: world)
+        }
+    }
+
+    private func lock(noun: String) async {
         let id = sessionID
-        Task {
-            let result = await Self.findTarget(noun: noun, snapshot: snapshot, label: "find_\(id)_\(samCalls)")
-            guard id == sessionID, phase == .locating || phase == .guiding else { return }  // stale
-            switch result {
-            case .success(let world):
-                let moved = target.map { simd_distance($0, world) }
-                target = world
-                log("sam_\(reason)", "ok" + (moved.map { String(format: " moved %.1f cm", $0 * 100) } ?? ""))
-                if phase == .locating {
-                    phase = .guiding
-                    speaker.say(GuidanceController.describe(target: world, cameraTransform: snapshot.cameraTransform, name: noun)
-                                + " Reach out slowly.", interrupt: true)
-                }
-            case .failure(let error):
-                log("sam_\(reason)_fail", error.reason)
-                if phase == .locating {
-                    phase = .idle
-                    speaker.say("I can't see the \(noun). Turn slowly, then tap and ask again.", interrupt: true)
-                }
+        let result = await segment(noun)
+        guard id == sessionID, phase == .locating else { return }  // stopped meanwhile
+        switch result {
+        case .failure(let error):
+            log("sam_lock_fail", error.reason)
+            phase = .idle
+            speaker.say("I can't see the \(noun). Turn slowly, then tap and ask again.", interrupt: true)
+        case .success(let list):
+            candidates = list
+            log("sam_lock", "\(list.count) candidates")
+            if AgentTools.isAmbiguous(list.map(\.info.confidence)) {
+                speaker.say("I see more than one \(noun). Checking.")
+                await runAgent(prompt: "The user said: \"\(lastHeard)\". SAM found several \(noun) candidates "
+                               + "(call get_state; the photo is what the chest camera sees). Select the one they mean, or ask them.",
+                               jpeg: lastJPEG, effort: .medium)
+            } else {
+                select(list[0])
             }
         }
     }
 
-    private static func findTarget(noun: String, snapshot s: FrameSnapshot, label: String) async -> Result<SIMD3<Float>, FindError> {
-        do {
-            let response = try await MetaAPI.segment(noun: noun, jpeg: s.jpeg, imageLabel: label)
-            // SAM returns every instance, unsorted; the most confident one wins for now.
-            // TODO(agent): ask Muse Spark (medium) to choose when several instances are close.
-            guard let best = SAMParser.parse(response.text).max(by: { ($0.confidence ?? 0) < ($1.confidence ?? 0) }),
-                  let raster = try? best.decodeMask() else { return .failure(FindError("no_object")) }
-            switch MaskTarget.locate(mask: SourceMask(record: best, raster: raster), depth: s.depth, intrinsics: s.intrinsics) {
-            case .success(let r):
-                return .success(DepthProjector.world(fromCamera: r.cameraPoint, cameraTransform: s.cameraTransform))
-            case .failure(let f):
-                return .failure(FindError(f.rawValue))
+    private func select(_ c: Candidate) {
+        target = c.world
+        phase = .guiding
+        log("target", "id \(c.info.id) c \(c.info.confidence)")
+        speaker.say(GuidanceController.describe(target: c.world, cameraTransform: lastCamera, name: targetName ?? "object")
+                    + " Reach out slowly.", interrupt: true)
+    }
+
+    /// Tracking recovered: re-run SAM and follow the nearest candidate if the object moved a little.
+    private func relock() {
+        guard let noun = targetName, let current = target else { return }
+        let id = sessionID
+        Task {
+            let result = await segment(noun)
+            guard id == sessionID, phase == .guiding else { return }
+            guard case .success(let list) = result,
+                  let nearest = list.min(by: { simd_distance($0.world, current) < simd_distance($1.world, current) }) else {
+                log("sam_relock_fail", "")
+                return
             }
-        } catch {
-            return .failure(FindError("api_error"))
+            let moved = simd_distance(nearest.world, current)
+            log("sam_relock", String(format: "moved %.1f cm", moved * 100))
+            if moved < 0.3 { target = nearest.world }
         }
+    }
+
+    // MARK: Muse Spark commander (tool calling)
+
+    private enum ToolResult {
+        case output(String)
+        case ended
+    }
+
+    private func runAgent(prompt: String, jpeg: Data?, effort: MuseAgent.Effort) async {
+        let id = sessionID
+        var input = MuseAgent.userMessage(AgentTools.instructions + "\n\n" + prompt, jpeg: jpeg)
+        var previous: String?
+        for turnIndex in 0..<6 {
+            let turn: SparkTurn
+            do {
+                turn = try await MuseAgent.respond(input: input, previousResponseID: previous, effort: effort,
+                                                   label: "agent_\(id)_\(turnIndex)")
+            } catch {
+                log("agent_error", error.localizedDescription)
+                guard id == sessionID else { return }
+                phase = .idle
+                speaker.say("Sorry, I'm not sure. Tap and try again.", interrupt: true)
+                return
+            }
+            guard id == sessionID, phase == .locating else { return }
+            previous = turn.responseID
+            if turn.calls.isEmpty {
+                // tool_choice is always auto: a plain text reply ends the turn.
+                log("agent_text", turn.text)
+                phase = .idle
+                speaker.say(turn.text.isEmpty ? "Sorry, I'm not sure. Tap and try again." : turn.text)
+                return
+            }
+            var outputs: [[String: Any]] = []
+            for call in turn.calls {
+                log("agent_tool", "\(call.name) \(call.arguments)")
+                guard let action = AgentAction.parse(name: call.name, arguments: call.arguments) else {
+                    outputs.append(MuseAgent.toolOutput(callID: call.callID, output: #"{"error":"unknown tool or bad arguments"}"#))
+                    continue
+                }
+                switch await perform(action) {
+                case .output(let text):
+                    outputs.append(MuseAgent.toolOutput(callID: call.callID, output: text))
+                case .ended:
+                    return
+                }
+                guard id == sessionID, phase == .locating else { return }
+            }
+            input = outputs
+        }
+        log("agent_turn_limit", "")
+        phase = .idle
+        speaker.say("Sorry, I'm not sure. Tap and try again.")
+    }
+
+    private func perform(_ action: AgentAction) async -> ToolResult {
+        switch action {
+        case .getState:
+            return .output(agentState().json())
+        case .findObject(let noun):
+            targetName = noun
+            speaker.say("Looking for the \(noun).")
+            switch await segment(noun) {
+            case .success(let list):
+                candidates = list
+                return .output(agentState().json())
+            case .failure(let error):
+                candidates = []
+                return .output("{\"error\":\"\(error.reason)\"}")
+            }
+        case .selectTarget(let candidateID):
+            guard let c = candidates.first(where: { $0.info.id == candidateID }) else {
+                return .output(#"{"error":"unknown candidate_id"}"#)
+            }
+            select(c)
+            return .ended
+        case .say(let text):
+            speaker.say(text)
+            return .output("ok")
+        case .askUser(let question):
+            speaker.say(question, interrupt: true)
+            try? await Task.sleep(for: .milliseconds(150))
+            while speaker.isSpeaking { try? await Task.sleep(for: .milliseconds(100)) }
+            let answer = (try? await input.listenOnce()) ?? ""
+            log("agent_answer", answer)
+            return .output(answer.isEmpty ? "(no answer)" : answer)
+        case .stop:
+            log("agent_stop", "")
+            phase = .idle
+            tones.stop()
+            return .ended
+        }
+    }
+
+    private func agentState() -> AgentState {
+        AgentState(phase: phase.rawValue, userSaid: lastHeard, targetName: targetName,
+                   candidates: candidates.map(\.info), samCallsLeft: Self.maxSAMCalls - samCalls, tracking: tracking)
     }
 
     // MARK: Local loop (~30 Hz)
@@ -195,7 +356,7 @@ final class FindModel {
         // Re-lock once tracking recovers (PRD: re-check when tracking confidence drops).
         if wasTrackingLimited && f.tracking == "normal" {
             wasTrackingLimited = false
-            locate(reason: "relock")
+            relock()
         }
         let offset = f.tip.map { BodyOffset(from: $0, to: target, cameraTransform: f.cameraTransform) }
         handDistance = offset?.length

@@ -68,6 +68,7 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `Sightline/Sightline/Spike/` | production, needs-review | G1, G2 and G3 test screens and models (remove from the release build later) |
 | `Sightline/Sightline/g1_marker.png` | testing, generated | G1 reference image bundled in the app |
 | `spike/model_api_spike.py` | spike, needs-review, sensitive | Muse Spark + SAM 3.1 round trip; reads the API key |
+| `spike/agent_spike.py` | spike, needs-review, sensitive | Mac smoke test of the Spark tool-calling loop; reads the API key |
 | `spike/requirements.txt` | spike, config | Python deps for the spike |
 | `spike/images/README.md` | spike, testing | Where to put the 5 test photos |
 | `spike/out/` (not in git) | generated | Mask overlay PNGs |
