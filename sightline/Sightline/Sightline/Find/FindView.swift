@@ -28,7 +28,8 @@ struct FindView: View {
         switch model.phase {
         case .idle, .done: "Speak a command"
         case .listening: "Listening"
-        case .grabbing: "Done, I have it"
+        case .grabbing: "Check what I'm holding"
+        case .verifying: "Checking"
         case .locating, .guiding: "Stop"
         }
     }
@@ -69,7 +70,8 @@ struct FindView: View {
         case .listening: "Listening…"
         case .locating: "Looking for the \(model.targetName ?? "object")…"
         case .guiding: "Guiding to the \(model.targetName ?? "object")"
-        case .grabbing: "Grab it — tap when you have it"
+        case .grabbing: "Grab it — tap to check it"
+        case .verifying: "Checking what you hold…"
         case .done: "Done. Tap for a new search"
         }
     }

@@ -128,7 +128,7 @@ public struct GuidanceSession: Sendable {
             let since = grabbingSince ?? time
             if !nudged && time - since >= grabNudgeAfter && !speaking {
                 nudged = true
-                out.lines.append(SpokenLine(text: "Tap the screen when you have it.", interrupt: false))
+                out.lines.append(SpokenLine(text: "Tap the screen when you have it, and I'll check it.", interrupt: false))
             }
             if time - since >= giveUpAfterGrab { phase = .gaveUp }
         case .done, .gaveUp:

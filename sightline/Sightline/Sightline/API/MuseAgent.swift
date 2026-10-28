@@ -53,8 +53,18 @@ nonisolated enum MuseAgent {
 
     /// Yes/no check: is the object in this crop a `noun`? Effort minimal (fast path). nil = unclear answer.
     static func verify(noun: String, jpeg: Data, label: String) async throws -> Bool? {
-        let prompt = "A blind user asked for: \(noun). Is the main object in the middle of this photo a \(noun)? "
-            + "Answer with one word: yes or no."
+        try await yesNo("A blind user asked for: \(noun). Is the main object in the middle of this photo a \(noun)? "
+                        + "Answer with one word: yes or no.", noun: noun, jpeg: jpeg, label: label)
+    }
+
+    /// After a tap ("I think I have it"): is the hand in this chest-camera crop holding or touching a `noun`?
+    static func verifyHolding(noun: String, jpeg: Data, label: String) async throws -> Bool? {
+        try await yesNo("This photo is from a chest camera of a blind user who asked for: \(noun). "
+                        + "Is their hand holding or touching a \(noun)? Answer with one word: yes or no.",
+                        noun: noun, jpeg: jpeg, label: label)
+    }
+
+    private static func yesNo(_ prompt: String, noun: String, jpeg: Data, label: String) async throws -> Bool? {
         guard let key = APIKey.value else { throw MetaAPIError.missingKey }
         let body: [String: Any] = [
             "model": model,
@@ -81,9 +91,10 @@ nonisolated enum MuseAgent {
         for item in json["output"] as? [[String: Any]] ?? [] where item["type"] as? String == "message" {
             for part in item["content"] as? [[String: Any]] ?? [] { text += part["text"] as? String ?? "" }
         }
-        let answer = text.lowercased()
-        if answer.contains("yes") { return true }
-        if answer.contains("no") { return false }
+        // First word decides ("No." / "Yes, ..."); "not sure" is not a no.
+        let first = text.lowercased().split(whereSeparator: { !$0.isLetter }).first.map(String.init)
+        if first == "yes" { return true }
+        if first == "no" { return false }
         return nil
     }
 

@@ -14,7 +14,12 @@ v3 = v2 rejected on 2026-10-28 (anchors off to the left, wrong object, no hand i
 2. SAM → target (green dot). If SAM is unsure (< 0.75) it says "Checking." and asks Spark yes/no first.
 3. It says where the object is, then asks for your hand.
 4. Hand seen → "I see your hand." Then one instruction at a time while your hand is still ("Right, about 20 centimetres."), silence while you move, "Stop." when you get there.
-5. Palm within 7 cm → "Stop. It's at your hand. Grab it." Lift it → "Got it. Well done." Or tap → "Great. Done." After 8 s: "Tap the screen when you have it." After 20 s: "Stopping."
+5. Palm within 7 cm → "Stop. It's at your hand. Grab it." Lift it → "Got it. Well done." After 8 s: "Tap the screen when you have it, and I'll check it." After 20 s: "Stopping."
+6. **Tap to check (new):** when you think you have it, tap. It says "Checking.", takes a photo, crops around your hand and asks Muse Spark (minimal, ~2 s, < $0.001) "is their hand holding a phone?".
+   - yes → "Yes, that's the phone. Well done."
+   - no → "That doesn't look like the phone. Put it down, and I'll guide you again." → guidance restarts to the same target.
+   - unclear / no answer in 25 s → "I'm not sure. Hold it in front of the camera and tap again."
+   Tap counts as "check" while grabbing, while guiding with the palm within 25 cm, and up to 15 s after an automatic "Got it". Elsewhere a tap still means stop (guiding) or a new command (idle).
 
 ## What gets saved (read this first)
 All in the app's Documents folder. Nothing is overwritten or deleted.
@@ -25,7 +30,7 @@ All in the app's Documents folder. Nothing is overwritten or deleted.
 | `diagnostics/<launch time>/` | **One folder per app launch.** Each event adds new files `NN_<kind>_…` (NN counts up). About 0.3 MB per event. |
 | `api_calls.csv` | One file for all launches, appended forever. |
 
-Recording events (`<kind>`): `sam` (every SAM call), `hand_seen` (at "I see your hand"), `grab` (at "Grab it"). Per event:
+Recording events (`<kind>`): `sam` (every SAM call), `hand_seen` (at "I see your hand"), `grab` (at "Grab it"), `hold_check` (the photo Spark judged). Per event:
 - `photo.jpg` — what SAM saw.
 - `overlay.jpg` — photo + SAM mask (green = most confident, yellow = others) + **red cross = where our 3D target lands back on the photo** + white dot = mask centre; for hand events **blue dots = Vision's joints, orange rings = our 3D hand points drawn back**.
 - `screen.jpg` — the screen as you saw it, with the AR dots.
@@ -33,14 +38,14 @@ Recording events (`<kind>`): `sam` (every SAM call), `hand_seen` (at "I see your
 
 How to read `overlay.jpg` yourself: if the red cross sits on the object and the orange rings sit on the blue dots, the maths is right and the left shift is in how the AR view draws the dots. If the cross or rings are off to the left, the bug is in our mapping.
 
-Log events: `command`, `say` (every spoken line), `sam_lock`, `sam_lock_fail`, `verify`, `target`, `target_outside_mask`, `sam_relock`, `recorded`, `pickup`, `done_tap`, `gave_up`, `stop`, `agent_*`.
+Log events: `command`, `say` (every spoken line), `sam_lock`, `sam_lock_fail`, `verify`, `target`, `target_outside_mask`, `sam_relock`, `recorded`, `pickup`, `hold_check`, `hold_check_result` (yes / no / unclear / timeout), `hold_yes`, `gave_up`, `stop`, `agent_*`.
 
 ## How to run
 1. Xcode → Run. App opens on **Find**.
 2. Put the phone (or a cup) on a table 40–60 cm in front of you, with a few other things around. Hold the iPhone against your chest with your **left hand**, camera facing the table.
 3. Move the iPhone slowly for 2–3 s so tracking is normal.
 4. Tap the screen, say "find the phone". Wait for "Hold your hand out…", then hold your **right hand** in front of the camera.
-5. Follow the voice. Eyes open the first time.
+5. Follow the voice. Eyes open the first time. Once, tap while holding the **wrong** object to check that it says no.
 6. Do 3 searches: phone, cup, and one object that is **not** on the table (it should say it can't see it).
 7. Tap **Export** (top right) → AirDrop to the Mac. If the folder does not come through, open the **Files** app → On My iPhone → Sightline → `diagnostics` → long-press the newest folder → Compress → AirDrop the zip.
 8. Tell me: what it said that was wrong or confusing, and put the folder + CSV in `logs/device/` on the Mac (not in git).

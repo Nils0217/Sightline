@@ -22,7 +22,7 @@ import UIKit
 @Observable
 final class FindModel {
     enum Phase: String {
-        case idle, listening, locating, guiding, grabbing, done
+        case idle, listening, locating, guiding, grabbing, verifying, done
     }
 
     static let maxSAMCalls = 5
@@ -50,6 +50,8 @@ final class FindModel {
     @ObservationIgnored private let tones = TonePlayer()
     @ObservationIgnored private let input = SpeechInput()
     @ObservationIgnored private var guide: GuidanceSession?
+    @ObservationIgnored private var doneAt: Date?
+    @ObservationIgnored private var resumePhase = Phase.grabbing
     @ObservationIgnored private var lastFrameTime: Double = 0
     @ObservationIgnored private let recorder = DiagnosticRecorder()
     @ObservationIgnored weak var arView: ARView?
@@ -96,18 +98,85 @@ final class FindModel {
         speaker.stop()
     }
 
-    /// The one big button: listen when idle, stop when busy.
+    /// Tap while guiding with the hand this close (or while grabbing) = "check what I'm holding".
+    static let verifyTapRadius: Float = 0.25
+    /// After an automatic "Got it", a tap within this many seconds checks the object instead of listening.
+    static let verifyAfterDone: TimeInterval = 15
+
+    /// The one big button: listen when idle, check the object when the hand is at it, stop otherwise.
     func tap() {
         switch phase {
-        case .idle, .done:
+        case .idle:
             listen()
+        case .done:
+            if let at = doneAt, Date().timeIntervalSince(at) < Self.verifyAfterDone, targetName != nil {
+                startHoldCheck()
+            } else {
+                listen()
+            }
         case .grabbing:
-            finish(spoken: "Great. Done.", event: "done_tap")
+            startHoldCheck()
+        case .guiding where (handDistance ?? .infinity) <= Self.verifyTapRadius:
+            startHoldCheck()
         case .guiding, .locating:
             finish(spoken: "Stopped.", event: "stop")
-        case .listening:
+        case .listening, .verifying:
             break
         }
+    }
+
+    // MARK: Hold check (tap -> Muse Spark yes/no on the hand region)
+
+    /// The user thinks they have it: photo of the next frame, crop around the hand, Spark (minimal) yes/no.
+    private func startHoldCheck() {
+        resumePhase = phase == .done ? .done : .grabbing
+        phase = .verifying
+        tones.stop()
+        speaker.say("Checking.", interrupt: true)
+        log("hold_check", "")
+        processor.requestCapture("hold_check")
+        // No photo (e.g. no depth this frame) or Spark too slow: give the button back.
+        let id = sessionID
+        Task {
+            try? await Task.sleep(for: .seconds(25))
+            guard id == sessionID, phase == .verifying else { return }
+            log("hold_check_result", "timeout")
+            say(SpokenLine(text: "I'm not sure. Hold it in front of the camera and tap again.", interrupt: true))
+            phase = resumePhase
+        }
+    }
+
+    private func runHoldCheck(_ s: FrameSnapshot, handVision: [HandJoint: SIMD2<Float>]) {
+        guard let noun = targetName else { return }
+        let id = sessionID
+        let crop = Self.handRegion(handVision, snapshot: s).flatMap { Self.crop(s.jpeg, to: $0, margin: 0.8) } ?? s.jpeg
+        Task {
+            let answer = try? await MuseAgent.verifyHolding(noun: noun, jpeg: crop, label: "hold_\(id)")
+            guard id == sessionID, phase == .verifying else { return }
+            let result = answer.flatMap { $0 }
+            log("hold_check_result", result.map { $0 ? "yes" : "no" } ?? "unclear")
+            switch result {
+            case true?:
+                finish(spoken: "Yes, that's the \(noun). Well done.", event: "hold_yes")
+            case false?:
+                // Back to guiding from the hand prompt; the target stays where SAM put it.
+                say(SpokenLine(text: "That doesn't look like the \(noun). Put it down, and I'll guide you again.", interrupt: true))
+                guide = target.map { GuidanceSession(targetName: noun, target: $0, cameraTransform: lastCamera, time: lastFrameTime) }
+                processor.target = target
+                phase = .guiding
+            case nil:
+                say(SpokenLine(text: "I'm not sure. Hold it in front of the camera and tap again.", interrupt: true))
+                phase = resumePhase
+            }
+        }
+    }
+
+    /// Bounding box of the Vision hand joints on the uploaded image, nil without joints.
+    nonisolated static func handRegion(_ joints: [HandJoint: SIMD2<Float>], snapshot s: FrameSnapshot) -> CGRect? {
+        let px = joints.values.map { DiagnosticRecorder.portraitPixel(vision: $0, snapshot: s) }
+        guard px.count >= 3, let minX = px.map(\.x).min(), let maxX = px.map(\.x).max(),
+              let minY = px.map(\.y).min(), let maxY = px.map(\.y).max() else { return nil }
+        return CGRect(x: CGFloat(minX), y: CGFloat(minY), width: CGFloat(maxX - minX), height: CGFloat(maxY - minY))
     }
 
     // MARK: Command
@@ -434,6 +503,7 @@ final class FindModel {
                    hand: RecordedHand(vision: f.handVision, world: f.hand?.joints ?? [:], depths: f.handDepths),
                    extra: ["hand_to_target_cm": handDistance.map { $0 * 100 } ?? -1,
                            "target_world": target.map { [$0.x, $0.y, $0.z] } ?? []])
+            if capture.kind == "hold_check" { runHoldCheck(capture.snapshot, handVision: f.handVision) }
         }
         guard phase == .guiding || phase == .grabbing, var session = guide else {
             handDistance = nil
@@ -491,7 +561,8 @@ final class FindModel {
         processor.target = nil
         if let spoken { speaker.say(spoken, interrupt: true) }
         log(event, spoken ?? "", distance: handDistance)
-        phase = ["pickup", "done_tap"].contains(event) ? .done : .idle
+        phase = ["pickup", "done_tap", "hold_yes"].contains(event) ? .done : .idle
+        doneAt = event == "pickup" ? Date() : nil
     }
 
     // MARK: Log
