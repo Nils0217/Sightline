@@ -6,7 +6,8 @@ import Testing
 @Suite struct AgentTests {
     @Test func parsesActions() {
         #expect(AgentAction.parse(name: "find_object", arguments: #"{"noun":" Water Bottle "}"#) == .findObject("water bottle"))
-        #expect(AgentAction.parse(name: "select_target", arguments: #"{"candidate_id":"1"}"#) == .selectTarget("1"))
+        #expect(AgentAction.parse(name: "select_target", arguments: #"{"candidate_id":"1"}"#) == .selectTarget("1", say: nil))
+        #expect(AgentAction.parse(name: "select_target", arguments: #"{"candidate_id":"0","say":"Left cup."}"#) == .selectTarget("0", say: "Left cup."))
         #expect(AgentAction.parse(name: "say", arguments: #"{"text":"Two cups. Checking."}"#) == .say("Two cups. Checking."))
         #expect(AgentAction.parse(name: "get_state", arguments: "{}") == .getState)
         #expect(AgentAction.parse(name: "stop", arguments: "") == .stop)

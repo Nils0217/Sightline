@@ -36,7 +36,8 @@ TOOLS = [
     tool("get_state", "Live state: what the user said, the target name, SAM candidates placed relative to the user's chest (right/up/forward in cm), SAM calls left, tracking."),
     tool("find_object", "Segment an object by a short noun phrase on the current camera frame (costs one SAM call). Returns the candidates found.",
          {"noun": {"type": "string", "description": "1-3 word noun phrase, e.g. 'water bottle'"}}, ["noun"]),
-    tool("select_target", "Lock one candidate as the target and start hand guidance. Ends your turn.", {"candidate_id": {"type": "string"}}, ["candidate_id"]),
+    tool("select_target", "Lock one candidate as the target and start hand guidance. Ends your turn.",
+         {"candidate_id": {"type": "string"}, "say": {"type": "string", "description": "Optional short sentence spoken as guidance starts"}}, ["candidate_id"]),
     tool("say", "Speak one short sentence to the user (blind; plain words, no visual references like colours unless they asked).", {"text": {"type": "string"}}, ["text"]),
     tool("ask_user", "Ask the user a short question and wait for the spoken answer, returned as the result.", {"question": {"type": "string"}}, ["question"]),
     tool("stop", "End the search."),
@@ -48,6 +49,8 @@ INSTRUCTIONS = (
     "Rules: keep spoken sentences under 15 words; say \"not sure\" instead of guessing; never give medical advice; "
     "never describe the scene at length. Pick a target only if it clearly matches what the user wants; "
     "if two candidates are equally plausible, ask_user which one using left/right/near/far, not colours. "
+    "The current state is included in the first message; call get_state only after something changed. "
+    "Do not call say right before select_target; put that sentence in select_target's say argument. "
     "Finish by calling select_target, or stop after telling the user why."
 )
 

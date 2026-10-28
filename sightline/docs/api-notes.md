@@ -104,9 +104,12 @@ Rate limits (per team): `muse-spark-1.3` 3000 RPM / 4M TPM; `sam-3.1` 3000 RPM.
   - Muse Spark Open: 816B MoE, 42B active. Muse Glimmer: 30B, "built for local and edge deployment". Both need your own GPUs; not covered by the Model API credit. https://dev.meta.ai/docs/open-weight-models
 - For accuracy at `minimal` effort use the levers the hosted API has: tighter prompts with a few examples, structured output (https://dev.meta.ai/docs/structured-output), prompt caching for the fixed prefix ($0.15 / 1M cached input), and on-device context (the user's spoken noun) so the model has less to infer.
 
-## Muse Spark tool calling (from https://dev.meta.ai/docs/tool-calling, 2026-10-28; not yet confirmed live)
+## Muse Spark tool calling (https://dev.meta.ai/docs/tool-calling; confirmed live 2026-10-28)
 - `tools`: flat `{"type":"function","name","description","parameters":{JSON Schema, "type":"object"}}`; optional `strict`.
 - Output items with `type: "function_call"`: `name`, `arguments` (JSON string), `call_id`.
 - Return results with a new request: `input` = `[{"type":"function_call_output","call_id","output": "<string>"}]`, `previous_response_id` = the previous response's `id`, same `tools`.
 - `tool_choice`: only `"auto"` (others → HTTP 400), so handle plain-text replies too. `parallel_tool_calls: false` = at most one call per turn.
 - Used by `Sightline/Sightline/API/MuseAgent.swift`; smoke test `spike/agent_spike.py`.
+- **Live (2026-10-28, spike/agent_spike.py):** shapes work as documented; Spark used get_state / find_object / ask_user / say / select_target sensibly.
+- **Do not use `previous_response_id` for latency-sensitive loops.** Follow-up turns took 9.5–29.7 s with it vs 0.9–4.5 s when we resend the history (`input` = original message + each `function_call` item + its `function_call_output`). First turns ~1.2–1.8 s either way.
+- Putting the state in the first message removes the get_state turn: "I'm thirsty" 21 s → 7.8 s (manual history) → 4.8 s (+ state in prompt). Two-cups case 56 s → 8–13 s (medium; plus the user's answer time).

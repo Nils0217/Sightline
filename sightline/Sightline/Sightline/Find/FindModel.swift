@@ -218,12 +218,12 @@ final class FindModel {
         }
     }
 
-    private func select(_ c: Candidate) {
+    private func select(_ c: Candidate, intro: String? = nil) {
         target = c.world
         phase = .guiding
         log("target", "id \(c.info.id) c \(c.info.confidence)")
-        speaker.say(GuidanceController.describe(target: c.world, cameraTransform: lastCamera, name: targetName ?? "object")
-                    + " Reach out slowly.", interrupt: true)
+        let whereIs = GuidanceController.describe(target: c.world, cameraTransform: lastCamera, name: targetName ?? "object")
+        speaker.say([intro, whereIs, "Reach out slowly."].compactMap { $0 }.joined(separator: " "), interrupt: true)
     }
 
     /// Tracking recovered: re-run SAM and follow the nearest candidate if the object moved a little.
@@ -253,13 +253,13 @@ final class FindModel {
 
     private func runAgent(prompt: String, jpeg: Data?, effort: MuseAgent.Effort) async {
         let id = sessionID
-        var input = MuseAgent.userMessage(AgentTools.instructions + "\n\n" + prompt, jpeg: jpeg)
-        var previous: String?
+        // State goes into the first message so Spark does not spend a turn on get_state.
+        var history = MuseAgent.userMessage(AgentTools.instructions + "\n\n" + prompt
+                                            + "\n\nCurrent state (same as get_state): " + agentState().json(), jpeg: jpeg)
         for turnIndex in 0..<6 {
             let turn: SparkTurn
             do {
-                turn = try await MuseAgent.respond(input: input, previousResponseID: previous, effort: effort,
-                                                   label: "agent_\(id)_\(turnIndex)")
+                turn = try await MuseAgent.respond(history: history, effort: effort, label: "agent_\(id)_\(turnIndex)")
             } catch {
                 log("agent_error", error.localizedDescription)
                 guard id == sessionID else { return }
@@ -268,7 +268,6 @@ final class FindModel {
                 return
             }
             guard id == sessionID, phase == .locating else { return }
-            previous = turn.responseID
             if turn.calls.isEmpty {
                 // tool_choice is always auto: a plain text reply ends the turn.
                 log("agent_text", turn.text)
@@ -291,7 +290,7 @@ final class FindModel {
                 }
                 guard id == sessionID, phase == .locating else { return }
             }
-            input = outputs
+            history += turn.calls.map(MuseAgent.callItem) + outputs
         }
         log("agent_turn_limit", "")
         phase = .idle
@@ -313,11 +312,11 @@ final class FindModel {
                 candidates = []
                 return .output("{\"error\":\"\(error.reason)\"}")
             }
-        case .selectTarget(let candidateID):
+        case .selectTarget(let candidateID, let sentence):
             guard let c = candidates.first(where: { $0.info.id == candidateID }) else {
                 return .output(#"{"error":"unknown candidate_id"}"#)
             }
-            select(c)
+            select(c, intro: sentence)
             return .ended
         case .say(let text):
             speaker.say(text)

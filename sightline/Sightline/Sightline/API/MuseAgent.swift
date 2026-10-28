@@ -2,6 +2,10 @@
 // One Muse Spark turn over the Responses API with function tools (shapes: docs/api-notes.md,
 // https://dev.meta.ai/docs/tool-calling). The tool loop itself runs in FindModel, which owns
 // the state the tools act on. Every call is logged to Documents/api_calls.csv.
+//
+// We resend the whole history each turn instead of using `previous_response_id`: measured
+// 2026-10-28 (spike/agent_spike.py), follow-up turns took 9–30 s with previous_response_id and
+// 1–4 s with the history resent.
 
 import Foundation
 import SightlineCore
@@ -29,8 +33,7 @@ nonisolated enum MuseAgent {
         var maxOutputTokens: Int { self == .minimal ? 1024 : 4096 }
     }
 
-    /// First turn: the user message (text + optional JPEG). Later turns: `function_call_output`
-    /// items plus `previousResponseID`, so the server keeps the history.
+    /// First item of the history: the user message (text + optional JPEG).
     static func userMessage(_ text: String, jpeg: Data?) -> [[String: Any]] {
         var content: [[String: Any]] = [["type": "input_text", "text": text]]
         if let jpeg {
@@ -43,18 +46,21 @@ nonisolated enum MuseAgent {
         ["type": "function_call_output", "call_id": callID, "output": output]
     }
 
-    static func respond(input: [[String: Any]], previousResponseID: String?, effort: Effort,
-                        label: String) async throws -> SparkTurn {
+    /// Echo of a call for the history; every output's call_id must match one of these, in order.
+    static func callItem(_ c: SparkCall) -> [String: Any] {
+        ["type": "function_call", "call_id": c.callID, "name": c.name, "arguments": c.arguments]
+    }
+
+    static func respond(history: [[String: Any]], effort: Effort, label: String) async throws -> SparkTurn {
         guard let key = APIKey.value else { throw MetaAPIError.missingKey }
-        var body: [String: Any] = [
+        let body: [String: Any] = [
             "model": model,
-            "input": input,
+            "input": history,
             "tools": AgentTools.definitions,
             "parallel_tool_calls": false,
             "reasoning": ["effort": effort.rawValue],
             "max_output_tokens": effort.maxOutputTokens,
         ]
-        if let previousResponseID { body["previous_response_id"] = previousResponseID }
 
         var request = URLRequest(url: MetaAPI.baseURL.appendingPathComponent("responses"))
         request.httpMethod = "POST"

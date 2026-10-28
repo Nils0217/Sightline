@@ -74,7 +74,8 @@ public struct AgentState: Codable, Sendable, Equatable {
 public enum AgentAction: Equatable, Sendable {
     case getState
     case findObject(String)
-    case selectTarget(String)
+    /// Candidate id plus an optional sentence spoken as guidance starts.
+    case selectTarget(String, say: String?)
     case say(String)
     case askUser(String)
     case stop
@@ -90,7 +91,7 @@ public enum AgentAction: Equatable, Sendable {
         switch name {
         case "get_state": return .getState
         case "find_object": return text("noun", max: 40).map { .findObject($0.lowercased()) }
-        case "select_target": return text("candidate_id", max: 8).map { .selectTarget($0) }
+        case "select_target": return text("candidate_id", max: 8).map { .selectTarget($0, say: text("say", max: 200)) }
         case "say": return text("text", max: 200).map { .say($0) }
         case "ask_user": return text("question", max: 200).map { .askUser($0) }
         case "stop": return .stop
@@ -106,7 +107,8 @@ public enum AgentTools {
         tool("find_object", "Segment an object by a short noun phrase on the current camera frame (costs one SAM call). Returns the candidates found.",
              ["noun": ["type": "string", "description": "1-3 word noun phrase, e.g. 'water bottle'"]], ["noun"]),
         tool("select_target", "Lock one candidate as the target and start hand guidance. Ends your turn.",
-             ["candidate_id": ["type": "string"]], ["candidate_id"]),
+             ["candidate_id": ["type": "string"],
+              "say": ["type": "string", "description": "Optional short sentence spoken as guidance starts"]], ["candidate_id"]),
         tool("say", "Speak one short sentence to the user (blind; plain words, no visual references like colours unless they asked).",
              ["text": ["type": "string"]], ["text"]),
         tool("ask_user", "Ask the user a short question and wait for the spoken answer, returned as the result.",
@@ -121,6 +123,8 @@ public enum AgentTools {
         Rules: keep spoken sentences under 15 words; say "not sure" instead of guessing; never give medical advice; \
         never describe the scene at length. Pick a target only if it clearly matches what the user wants; \
         if two candidates are equally plausible, ask_user which one using left/right/near/far, not colours. \
+        The current state is included in the first message; call get_state only after something changed. \
+        Do not call say right before select_target; put that sentence in select_target's say argument. \
         Finish by calling select_target, or stop after telling the user why.
         """
 
