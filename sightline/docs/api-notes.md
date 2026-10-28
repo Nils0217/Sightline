@@ -97,3 +97,9 @@ Rate limits (per team): `muse-spark-1.3` 3000 RPM / 4M TPM; `sam-3.1` 3000 RPM.
 - `metadata={"include_confidence": "true"}` adds `c=` to both box and mask tokens.
 - One noun can return several objects (ids 0,1,2), **not sorted by confidence**.
 - `meta-sam-parser` 0.1.0 decoded all masks; mask raster is box-local as documented.
+
+## Fine-tuning (checked 2026-10-28)
+- Hosted `muse-spark-1.3` and `sam-3.1` on the Model API: **no fine-tuning, LoRA or custom training is documented.** Source: https://dev.meta.ai/docs (full section list).
+- Post-training exists only for the **open-weight** models, self-hosted with TorchTitan (SFT on own text/image/audio conversations, or RL with GRPO): https://dev.meta.ai/docs/cookbook/post-training
+  - Muse Spark Open: 816B MoE, 42B active. Muse Glimmer: 30B, "built for local and edge deployment". Both need your own GPUs; not covered by the Model API credit. https://dev.meta.ai/docs/open-weight-models
+- For accuracy at `minimal` effort use the levers the hosted API has: tighter prompts with a few examples, structured output (https://dev.meta.ai/docs/structured-output), prompt caching for the fixed prefix ($0.15 / 1M cached input), and on-device context (the user's spoken noun) so the model has less to infer.

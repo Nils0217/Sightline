@@ -119,4 +119,5 @@ Findings:
 - Only `minimal` fits a 3 s budget, and only just (no room left for SAM + speech).
 - Naming quality at `minimal` is as good as `medium` on these photos: every listed item is plausible, and the first items are real graspable objects. `minimal` even avoided medium's vague "blanket".
 - Latency is dominated by reasoning tokens; tokens and latency fall together.
+- **Decision (Nils, 2026-10-28):** `minimal` for fast-path calls, `medium` for reasoning; AGENTS.md updated.
 - **Architecture implication:** in the main use case the user *says* the object ("find my cup"), so the noun comes from on-device speech recognition and SAM can be called directly (0.5–1.5 s). Spark does not need to be on the critical path to first guidance; it can disambiguate (several SAM instances) or handle open questions in parallel. The instant local spoken cue covers the gap either way.

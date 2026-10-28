@@ -27,7 +27,7 @@ Muse Code works on a branch per task (`muse/<task>`); Claude reviews before merg
 - Meta requires a card on file to use the credit, so set the Billing **Spend Limit** to $150 or less. Alerts at $50 / $100 / $140.
 - **SAM is event-triggered, not 1 Hz:** call it on target lock, when tracking confidence drops, and once before "now grab". Target ≤ 5 calls per guidance session.
 - **Downscale images to ~512 px** on the long edge before any upload.
-- **Muse Spark `reasoning_effort: medium`**, short `max_tokens` for spoken output.
+- **Muse Spark effort by job** (Nils, 2026-10-28, from G4): `minimal` for fast-path calls (naming objects, short yes/no checks, spoken replies); `medium` for real reasoning (choosing between several SAM instances, planning). Keep `max_output_tokens` generous — reasoning tokens count toward it. Spark is never on the critical path to the first spoken guidance.
 - Log latency and estimated cost of every API call to `logs/api_calls.csv`. Reuse fixed test images in `spike/images/`.
 - Coding agents: if Muse Code spend exceeds ~$15 in a day, move work back to Claude.
 
