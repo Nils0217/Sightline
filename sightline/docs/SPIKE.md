@@ -32,7 +32,11 @@ Full plan (v2, reviewed): `docs/G1_PLAN.md`. Gate = median ≤ 3 cm **and** vali
 - **Pass:** median error ≤ 3 cm. **Fail →** guide to within 10 cm, then spoken touch-exploration
 
 ### G2 Mask → 3D target
-- [ ] SAM mask centroid + depth → world-space anchor; walk around, check anchor stays on the object
+Full plan and run steps: `docs/G2_PLAN.md`.
+- [x] Swift SAM parser + mask decoder (matches `meta-sam-parser` bit-for-bit on 7 real masks)
+- [x] Mask + LiDAR → 3D point (eroded mask, per-axis median), unit-tested
+- [x] G2 test screen: Lock + up to 4 re-measures, CSV, ≤ 5 SAM calls per launch
+- [ ] Device run (Nils): flat object, walk around ≥ 30 s
 - **Pass:** drift ≤ 3 cm over 30 s
 
 ### G3 Relocalization

@@ -8,10 +8,30 @@
 
 import SwiftUI
 
-/// Root screen. For now it hosts the G1 hand-accuracy test (docs/G1_PLAN.md).
+/// Root screen. Hosts the gate tests; only the selected one runs its AR session.
+/// Switching tests discards the other test's in-memory state (its CSV stays in Documents).
 struct ContentView: View {
+    enum Test: String, CaseIterable, Identifiable {
+        case g1 = "G1 hand"
+        case g2 = "G2 target"
+        var id: Self { self }
+    }
+
+    @State private var test = Test.g2
+
     var body: some View {
-        G1MeasureView()
+        ZStack(alignment: .top) {
+            switch test {
+            case .g1: G1MeasureView()
+            case .g2: G2MeasureView()
+            }
+            Picker("Test", selection: $test) {
+                ForEach(Test.allCases) { Text($0.rawValue) }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 60)
+            .padding(.top, 4)
+        }
     }
 }
 

@@ -43,18 +43,25 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `docs/CLAUDE_CODE_PROMPT.md` | reference | Kickoff prompt used to start Spike 0 |
 | `docs/FILE_LABELS.md` | important, reference | This file |
 | `docs/api-notes.md` | reference, important | Verified Meta Model API request shapes and prices |
-| `docs/G1_PLAN.md` | important, testing, needs-review | G1 hand-accuracy plan v2; awaiting approval |
+| `docs/G1_PLAN.md` | important, testing, verified | G1 hand-accuracy plan v2; gate passed 2026-10-27 |
+| `docs/G2_PLAN.md` | important, testing, needs-review | G2 mask → 3D target plan and run steps |
 | `docs/ARKIT_SAMPLE.md` | testing, reference | How to run Apple's ARKit sample on the iPhone (S0.1) |
 | `docs/assets/g1_marker_print.pdf` | testing, generated | Printable 10 cm G1 marker |
 | `tools/make_g1_marker.py` | testing, needs-review | Generates the G1 marker PNG + PDF |
+| `tools/make_sam_fixtures.py` | testing, needs-review | Builds SAM decoder fixtures with Meta's Python parser (needs `.venv`) |
+| `tools/ios_secrets.sh` | config, sensitive | Writes the API key into the gitignored `Secrets.plist`; never prints it |
+| `Packages/SightlineCore/Tests/SightlineCoreTests/Fixtures/` | testing, generated | Real SAM outputs + expected decodes from the Python parser |
 | `Packages/SightlineCore/` | production, needs-review, important | Pure geometry / sampling / stats; unit-tested on Mac |
 | `Packages/SightlineCore/Tests/` | testing, needs-review | Swift Testing suites (`swift test`) |
 | `Sightline/Sightline.xcodeproj` | production, config | Xcode project |
 | `Sightline/Sightline/SightlineApp.swift` | production | App entry |
-| `Sightline/Sightline/ContentView.swift` | production, needs-review | Root screen; hosts G1 for now |
+| `Sightline/Sightline/ContentView.swift` | production, needs-review | Root screen; G1/G2 test switch |
+| `Sightline/Sightline-Info.plist` | config, production | Extra Info.plist keys (file sharing) merged into the generated plist |
+| `Sightline/Sightline/API/` | production, needs-review, sensitive | Meta Model API client, call log, key reader |
+| `Sightline/Sightline/Secrets.plist` (not in git) | sensitive | API key for the app; written by `tools/ios_secrets.sh` |
 | `Sightline/Sightline/AR/` | production, needs-review, important | ARKit frame pipeline |
 | `Sightline/Sightline/Hand/` | production, needs-review | Vision hand pose |
-| `Sightline/Sightline/Spike/` | production, needs-review | G1 test screen and model (remove from the release build later) |
+| `Sightline/Sightline/Spike/` | production, needs-review | G1 and G2 test screens and models (remove from the release build later) |
 | `Sightline/Sightline/g1_marker.png` | testing, generated | G1 reference image bundled in the app |
 | `spike/model_api_spike.py` | spike, needs-review, sensitive | Muse Spark + SAM 3.1 round trip; reads the API key |
 | `spike/requirements.txt` | spike, config | Python deps for the spike |

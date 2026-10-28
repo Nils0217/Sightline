@@ -12,6 +12,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "SightlineCore"),
-        .testTarget(name: "SightlineCoreTests", dependencies: ["SightlineCore"]),
+        .testTarget(name: "SightlineCoreTests", dependencies: ["SightlineCore"],
+                    resources: [.copy("Fixtures")]),
     ]
 )

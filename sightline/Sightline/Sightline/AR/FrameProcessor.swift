@@ -132,7 +132,7 @@ nonisolated final class FrameProcessor: NSObject, ARSessionDelegate, @unchecked 
         return maxDev * 1000
     }
 
-    private static func describe(_ state: ARCamera.TrackingState) -> String {
+    static func describe(_ state: ARCamera.TrackingState) -> String {
         switch state {
         case .normal: "normal"
         case .notAvailable: "not_available"

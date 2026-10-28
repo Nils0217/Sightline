@@ -8,6 +8,7 @@ xcuserdata/
 
 # Secrets — never commit API keys
 Secrets.xcconfig
+Secrets.plist
 .env
 
 # macOS
