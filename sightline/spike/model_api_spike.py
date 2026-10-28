@@ -290,7 +290,8 @@ def main() -> None:
         except Exception as exc:  # keep going so one bad image doesn't waste the run
             row["error"] = f"{type(exc).__name__}: {exc}"[:120]
         rows.append(row)
-        print(f"{path.name}: segmented '{row['noun']}' ({row['objects']} objects) | Spark saw: {row['seen']}"
+        action = f"named '{row['noun']}'" if args.spark_only else f"segmented '{row['noun']}' ({row['objects']} objects)"
+        print(f"{path.name}: {action} | Spark saw: {row['seen']}"
               f"{'  ERROR ' + row['error'] if row['error'] else ''}")
 
     print()

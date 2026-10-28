@@ -49,7 +49,7 @@ Full plan and run steps: `docs/G3_PLAN.md`.
 - **Pass:** voice command → first spoken guidance ≤ 3 s
 - Decision (Nils, 2026-10-28): option C = both. (1) Measure Spark at `low` and `minimal` on the 5 spike images (`spike/model_api_spike.py --effort low --spark-only`), compare latency and noun quality with `medium`. (2) Whatever the effort, the app speaks an instant local cue ("Looking for the cup") before any cloud call.
 - [x] Spike script: `--effort`, `--spark-only`
-- [ ] Run low + minimal (Nils, needs the key in the terminal)
+- [x] Run low + minimal (Nils, 2026-10-28) → see "G4 Spark effort results"
 
 ## Open questions
 
@@ -66,7 +66,7 @@ Full plan and run steps: `docs/G3_PLAN.md`.
 | G1 | 2026-10-27 | **Pass.** 60 touches over 6 scenarios: median 1.43 cm, mean 1.24, P90 1.96, max 7.08; valid rate 91–100% per scenario | – | – | See "G1 per-scenario results" below. Distance in the scenario name is the phone *height*, not the camera→tip range. |
 | G2 | 2026-10-28 | **Pass.** Book on a table; 4 re-measures over 88 s from 4 viewpoints (range 0.69–1.23 m, camera moved up to ~1.5 m): distance to first lock 1.01, 1.08, 0.99, 0.78 cm (max 1.08 cm, gate 3 cm). Return-to-start drift 0.78 cm | SAM 0.7–2.6 s (median 1.6 s) | 5 × $0.0025 | See "G2 results" below |
 | G3 | | | | | |
-| G4 | | | | | |
+| G4 | 2026-10-28 | **Spark part measured; end-to-end not yet.** Spark median 6.1 s (medium) → 4.0 s (low) → **2.0 s (minimal)** on the same 5 images | see below | per call: medium ~$0.0068, low ~$0.0034, minimal ~$0.0014 | Effort for the app = Nils's call |
 
 ### G1 per-scenario results (2026-10-27)
 
@@ -104,3 +104,19 @@ Findings:
 - `depth_spread` (P90 − P10 of depth) is 6–15 cm even on a flat book. That is expected for an oblique view of a ~25 cm object (depth varies across its surface), so it is **not** a mixing indicator as designed. Replace with a plane-fit residual or distance spread around the median point if we need a quality signal.
 - Measure #1 returned 2 instances; the highest-confidence one (0.965) was correct.
 - Phone-side `api_calls.csv` was not copied into `logs/` this time; costs above are from the call count.
+
+### G4 Spark effort results (2026-10-28)
+
+Same 5 images, ranked-list naming prompt, `--spark-only`. Medium numbers are from the 2026-10-27 run.
+
+| Effort | Latency min–max | Median | Output tokens | Cost / call | First noun per image (5770 / 71 / 72 / 73 / 74) |
+|---|---|---|---|---|---|
+| medium | 4.1–11.5 s | 6.1 s | 849–1970 | ~$0.0068 | white bottle / red container / white blanket / blanket / black notebook |
+| low | 2.5–5.6 s | 4.0 s | 488–1081 | ~$0.0034 | water bottle / clear pitcher / white blanket / clear jar / black notebook |
+| minimal | 1.4–2.2 s | 2.0 s | 178–300 | ~$0.0014 | white water bottle / red container / white blanket / glass jar / toilet paper roll |
+
+Findings:
+- Only `minimal` fits a 3 s budget, and only just (no room left for SAM + speech).
+- Naming quality at `minimal` is as good as `medium` on these photos: every listed item is plausible, and the first items are real graspable objects. `minimal` even avoided medium's vague "blanket".
+- Latency is dominated by reasoning tokens; tokens and latency fall together.
+- **Architecture implication:** in the main use case the user *says* the object ("find my cup"), so the noun comes from on-device speech recognition and SAM can be called directly (0.5–1.5 s). Spark does not need to be on the critical path to first guidance; it can disambiguate (several SAM instances) or handle open questions in parallel. The instant local spoken cue covers the gap either way.
