@@ -46,6 +46,7 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `docs/G1_PLAN.md` | important, testing, verified | G1 hand-accuracy plan v2; gate passed 2026-10-27 |
 | `docs/G2_PLAN.md` | important, testing, verified | G2 mask → 3D target plan; gate passed 2026-10-28 |
 | `docs/G3_PLAN.md` | important, testing, needs-review | G3 world-map relocalization plan and run steps |
+| `docs/FIND_TEST.md` | important, testing, needs-review | Find-and-grab v1 flow and device test steps |
 | `docs/ARKIT_SAMPLE.md` | testing, reference | How to run Apple's ARKit sample on the iPhone (S0.1) |
 | `docs/assets/g1_marker_print.pdf` | testing, generated | Printable 10 cm G1 marker |
 | `tools/make_g1_marker.py` | testing, needs-review | Generates the G1 marker PNG + PDF |
@@ -56,7 +57,9 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `Packages/SightlineCore/Tests/` | testing, needs-review | Swift Testing suites (`swift test`) |
 | `Sightline/Sightline.xcodeproj` | production, config | Xcode project |
 | `Sightline/Sightline/SightlineApp.swift` | production | App entry |
-| `Sightline/Sightline/ContentView.swift` | production, needs-review | Root screen; G1/G2 test switch |
+| `Sightline/Sightline/ContentView.swift` | production, needs-review | Root screen; Find + G1/G2/G3 tabs |
+| `Sightline/Sightline/Find/` | production, needs-review, important | Find-and-grab session: command → SAM lock → hand guidance |
+| `Sightline/Sightline/Audio/` | production, needs-review | On-device speech input, spoken output, proximity tones |
 | `Sightline/Sightline-Info.plist` | config, production | Extra Info.plist keys (file sharing) merged into the generated plist |
 | `Sightline/Sightline/API/` | production, needs-review, sensitive | Meta Model API client, call log, key reader |
 | `Sightline/Sightline/Secrets.plist` (not in git) | sensitive | API key for the app; written by `tools/ios_secrets.sh` |

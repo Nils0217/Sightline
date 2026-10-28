@@ -29,13 +29,12 @@ nonisolated struct FrameMeasurement: Sendable {
 }
 
 nonisolated final class FrameProcessor: NSObject, ARSessionDelegate, @unchecked Sendable {
-    static let minHandConfidence: Float = 0.5
+    static let minHandConfidence = FingertipLocator.minHandConfidence
     static let jitterWindow: Double = 5
 
     let queue = DispatchQueue(label: "sightline.frames", qos: .userInteractive)
     private let onMeasurement: @Sendable (FrameMeasurement) -> Void
-    private let hand = HandPoseDetector()
-    private let sampler = DepthSampler()
+    private let locator = FingertipLocator()
 
     // Accessed only on `queue`.
     private var dwell = DwellDetector()
@@ -73,41 +72,14 @@ nonisolated final class FrameProcessor: NSObject, ARSessionDelegate, @unchecked 
             anchorHistory.removeAll()
         }
 
-        guard let tip = hand.indexTip(in: frame.capturedImage, orientation: .right) else {
-            m.failReason = "no_hand"
-            return finish(m)
-        }
-        m.handConfidence = tip.confidence
-        m.visionTip = tip.point
-        guard tip.confidence >= Self.minHandConfidence else {
-            m.failReason = "low_hand_conf"
-            return finish(m)
-        }
-        guard case .normal = frame.camera.trackingState else {
-            m.failReason = "tracking_limited"
-            return finish(m)
-        }
-        guard let depthData = frame.sceneDepth, let depth = DepthImageReader.read(depthData) else {
-            m.failReason = "depth_invalid"
-            return finish(m)
-        }
-
-        let rawSize = SIMD2(Float(frame.camera.imageResolution.width), Float(frame.camera.imageResolution.height))
-        let depthSize = SIMD2(Float(depth.width), Float(depth.height))
-        let raw = DepthProjector.rawPixel(fromVision: tip.point, orientation: .right, rawSize: rawSize)
-        let depthPixel = (raw + 0.5) * (depthSize / rawSize) - 0.5
-
-        switch sampler.sample(depth, at: depthPixel) {
-        case .failure(let failure):
-            m.failReason = failure.rawValue
-        case .success(let sample):
-            let k = CameraIntrinsics(matrix: frame.camera.intrinsics, imageSize: rawSize).scaled(to: depthSize)
-            let cameraPoint = DepthProjector.unproject(pixel: depthPixel, depth: sample.depth, intrinsics: k)
-            m.tip = DepthProjector.world(fromCamera: cameraPoint, cameraTransform: frame.camera.transform)
-            m.tipDepth = sample.depth
-            m.validSamples = sample.validSamples
-            m.depthRelaxed = sample.relaxed
-        }
+        let r = locator.locate(in: frame)
+        m.handConfidence = r.handConfidence
+        m.visionTip = r.visionTip
+        m.tip = r.tip
+        m.tipDepth = r.depth
+        m.validSamples = r.validSamples
+        m.depthRelaxed = r.depthRelaxed
+        m.failReason = r.failReason
         return finish(m)
     }
 

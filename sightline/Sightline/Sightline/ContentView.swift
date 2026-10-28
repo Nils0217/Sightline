@@ -8,21 +8,23 @@
 
 import SwiftUI
 
-/// Root screen. Hosts the gate tests; only the selected one runs its AR session.
+/// Root screen: the find-and-grab app plus the gate tests; only the selected one runs its AR session.
 /// Switching tests discards the other test's in-memory state (its CSV stays in Documents).
 struct ContentView: View {
     enum Test: String, CaseIterable, Identifiable {
+        case find = "Find"
         case g1 = "G1 hand"
         case g2 = "G2 target"
         case g3 = "G3 map"
         var id: Self { self }
     }
 
-    @State private var test = Test.g3
+    @State private var test = Test.find
 
     var body: some View {
         ZStack(alignment: .top) {
             switch test {
+            case .find: FindView()
             case .g1: G1MeasureView()
             case .g2: G2MeasureView()
             case .g3: G3MeasureView()
@@ -31,7 +33,7 @@ struct ContentView: View {
                 ForEach(Test.allCases) { Text($0.rawValue) }
             }
             .pickerStyle(.segmented)
-            .padding(.horizontal, 40)
+            .padding(.horizontal, 24)
             .padding(.top, 4)
         }
     }
