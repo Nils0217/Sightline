@@ -10,6 +10,10 @@ Request shapes: docs/api-notes.md.
 Usage (from the sightline/ folder):
   python3 spike/model_api_spike.py            # all images
   python3 spike/model_api_spike.py --limit 1  # first image only (cheap smoke test)
+  python3 spike/model_api_spike.py --effort low --spark-only   # G4: Spark latency at another effort
+
+`--effort` other than medium is a G4 experiment (approved by Nils 2026-10-28); AGENTS.md
+still mandates medium for the app until G4 is decided.
 """
 
 from __future__ import annotations
@@ -143,7 +147,8 @@ def log_call(image: str, model: str, noun: str, latency_ms: float,
         })
 
 
-def name_object(client: OpenAI, model: str, data_url: str) -> tuple[list[str], float, int, int, float, str]:
+def name_object(client: OpenAI, model: str, data_url: str,
+                effort: str = "medium") -> tuple[list[str], float, int, int, float, str]:
     """Return (nouns, latency_ms, input_tokens, output_tokens, cost_usd, raw_response_json).
 
     nouns is a ranked list of noun phrases, or [UNSURE] (the model said so), or
@@ -153,7 +158,7 @@ def name_object(client: OpenAI, model: str, data_url: str) -> tuple[list[str], f
     response = client.responses.create(
         model=model,
         input=user_message(NAMING_PROMPT, data_url),
-        reasoning={"effort": "medium"},
+        reasoning={"effort": effort},
         max_output_tokens=SPARK_MAX_OUTPUT_TOKENS,
     )
     latency_ms = (time.perf_counter() - start) * 1000
@@ -244,6 +249,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", default="muse-spark-1.3", help="Muse Spark model id (not -contributor)")
     parser.add_argument("--limit", type=int, default=0, help="process only the first N images")
+    parser.add_argument("--effort", default="medium", choices=["minimal", "low", "medium"],
+                        help="Spark reasoning effort (non-medium = G4 experiment)")
+    parser.add_argument("--spark-only", action="store_true", help="skip SAM (it does not depend on effort)")
     args = parser.parse_args()
 
     images = sorted(p for p in IMAGES_DIR.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
@@ -261,16 +269,19 @@ def main() -> None:
     for path in images:
         img = downscale(path)
         data_url = to_data_url(img)
-        row = {"image": path.name, "noun": "-", "spark_ms": 0.0, "sam_ms": 0.0, "objects": 0, "cost": 0.0, "error": "", "seen": ""}
+        row = {"image": path.name, "noun": "-", "spark_ms": 0.0, "sam_ms": 0.0, "objects": 0, "cost": 0.0,
+               "out_tok": 0, "error": "", "seen": ""}
+        suffix = "" if args.effort == "medium" else f".{args.effort}"
+        model_label = args.model if args.effort == "medium" else f"{args.model}/{args.effort}"
         try:
-            nouns, ms, in_tok, out_tok, cost, raw = name_object(client, args.model, data_url)
+            nouns, ms, in_tok, out_tok, cost, raw = name_object(client, args.model, data_url, args.effort)
             noun = nouns[0]
             row["seen"] = ", ".join(nouns)
-            (OUT_DIR / f"{path.stem}.spark.json").write_text(raw)
-            log_call(path.name, args.model, noun, ms, in_tok, out_tok, cost)
-            row.update(noun=noun, spark_ms=ms, cost=cost)
+            (OUT_DIR / f"{path.stem}.spark{suffix}.json").write_text(raw)
+            log_call(path.name, model_label, noun, ms, in_tok, out_tok, cost)
+            row.update(noun=noun, spark_ms=ms, cost=cost, out_tok=out_tok)
 
-            if noun not in ("UNSURE", "TRUNCATED"):
+            if noun not in ("UNSURE", "TRUNCATED") and not args.spark_only:
                 sam_text, ms, in_tok, out_tok = segment(client, noun, data_url)
                 log_call(path.name, SAM_MODEL, noun, ms, in_tok, out_tok, SAM_PER_IMAGE)
                 row.update(sam_ms=ms, cost=row["cost"] + SAM_PER_IMAGE)
@@ -283,14 +294,15 @@ def main() -> None:
               f"{'  ERROR ' + row['error'] if row['error'] else ''}")
 
     print()
-    header = f"{'image':<28}{'noun':<18}{'spark ms':>9}{'sam ms':>9}{'objs':>6}{'cost $':>10}"
+    print(f"Spark effort: {args.effort}")
+    header = f"{'image':<28}{'noun':<18}{'spark ms':>9}{'out tok':>8}{'sam ms':>9}{'objs':>6}{'cost $':>10}"
     print(header)
     print("-" * len(header))
     for r in rows:
-        print(f"{r['image'][:27]:<28}{r['noun'][:17]:<18}{r['spark_ms']:>9.0f}{r['sam_ms']:>9.0f}{r['objects']:>6}{r['cost']:>10.4f}")
+        print(f"{r['image'][:27]:<28}{r['noun'][:17]:<18}{r['spark_ms']:>9.0f}{r['out_tok']:>8}{r['sam_ms']:>9.0f}{r['objects']:>6}{r['cost']:>10.4f}")
     total = sum(r["cost"] for r in rows)
     print("-" * len(header))
-    print(f"{'total':<28}{'':<18}{'':>9}{'':>9}{'':>6}{total:>10.4f}")
+    print(f"{'total':<28}{'':<18}{'':>9}{'':>8}{'':>9}{'':>6}{total:>10.4f}")
     print(f"\nOverlays: {OUT_DIR}\nLog: {LOG_PATH}")
 
 

@@ -40,11 +40,16 @@ Full plan and run steps: `docs/G2_PLAN.md`.
 - **Pass:** drift ≤ 3 cm over 30 s
 
 ### G3 Relocalization
-- [ ] Save `ARWorldMap` after a scan, relaunch, relocalize
+Full plan and run steps: `docs/G3_PLAN.md`.
+- [x] G3 test screen: scan, place marker, save map, relaunch, load, time relocalization
+- [ ] Device run (Nils)
 - **Pass:** relocalizes in ≤ 10 s. **Fail →** same-session scan for the demo
 
 ### G4 Latency
 - **Pass:** voice command → first spoken guidance ≤ 3 s
+- Decision (Nils, 2026-10-28): option C = both. (1) Measure Spark at `low` and `minimal` on the 5 spike images (`spike/model_api_spike.py --effort low --spark-only`), compare latency and noun quality with `medium`. (2) Whatever the effort, the app speaks an instant local cue ("Looking for the cup") before any cloud call.
+- [x] Spike script: `--effort`, `--spark-only`
+- [ ] Run low + minimal (Nils, needs the key in the terminal)
 
 ## Open questions
 

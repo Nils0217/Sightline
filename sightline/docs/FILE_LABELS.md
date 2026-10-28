@@ -44,7 +44,8 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `docs/FILE_LABELS.md` | important, reference | This file |
 | `docs/api-notes.md` | reference, important | Verified Meta Model API request shapes and prices |
 | `docs/G1_PLAN.md` | important, testing, verified | G1 hand-accuracy plan v2; gate passed 2026-10-27 |
-| `docs/G2_PLAN.md` | important, testing, needs-review | G2 mask → 3D target plan and run steps |
+| `docs/G2_PLAN.md` | important, testing, verified | G2 mask → 3D target plan; gate passed 2026-10-28 |
+| `docs/G3_PLAN.md` | important, testing, needs-review | G3 world-map relocalization plan and run steps |
 | `docs/ARKIT_SAMPLE.md` | testing, reference | How to run Apple's ARKit sample on the iPhone (S0.1) |
 | `docs/assets/g1_marker_print.pdf` | testing, generated | Printable 10 cm G1 marker |
 | `tools/make_g1_marker.py` | testing, needs-review | Generates the G1 marker PNG + PDF |
@@ -61,7 +62,7 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `Sightline/Sightline/Secrets.plist` (not in git) | sensitive | API key for the app; written by `tools/ios_secrets.sh` |
 | `Sightline/Sightline/AR/` | production, needs-review, important | ARKit frame pipeline |
 | `Sightline/Sightline/Hand/` | production, needs-review | Vision hand pose |
-| `Sightline/Sightline/Spike/` | production, needs-review | G1 and G2 test screens and models (remove from the release build later) |
+| `Sightline/Sightline/Spike/` | production, needs-review | G1, G2 and G3 test screens and models (remove from the release build later) |
 | `Sightline/Sightline/g1_marker.png` | testing, generated | G1 reference image bundled in the app |
 | `spike/model_api_spike.py` | spike, needs-review, sensitive | Muse Spark + SAM 3.1 round trip; reads the API key |
 | `spike/requirements.txt` | spike, config | Python deps for the spike |

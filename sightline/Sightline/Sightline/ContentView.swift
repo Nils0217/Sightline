@@ -14,22 +14,24 @@ struct ContentView: View {
     enum Test: String, CaseIterable, Identifiable {
         case g1 = "G1 hand"
         case g2 = "G2 target"
+        case g3 = "G3 map"
         var id: Self { self }
     }
 
-    @State private var test = Test.g2
+    @State private var test = Test.g3
 
     var body: some View {
         ZStack(alignment: .top) {
             switch test {
             case .g1: G1MeasureView()
             case .g2: G2MeasureView()
+            case .g3: G3MeasureView()
             }
             Picker("Test", selection: $test) {
                 ForEach(Test.allCases) { Text($0.rawValue) }
             }
             .pickerStyle(.segmented)
-            .padding(.horizontal, 60)
+            .padding(.horizontal, 40)
             .padding(.top, 4)
         }
     }
