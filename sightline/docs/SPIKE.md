@@ -27,8 +27,8 @@ Goal: prove the riskiest paths work before building the full app. Record every n
 
 ### G1 Hand 3D accuracy
 Full plan (v2, reviewed): `docs/G1_PLAN.md`. Gate = median ≤ 3 cm **and** valid rate ≥ 80% over 60 static touches.
-- [ ] Minimal app: ARKit `sceneDepth` + Vision `VNDetectHumanHandPoseRequest`; project index fingertip to world space using the depth map
-- [ ] Place a marker object at a measured position; touch it 10 times; log error
+- [x] Minimal app: ARKit `sceneDepth` + Vision `VNDetectHumanHandPoseRequest`; project index fingertip to world space using the depth map
+- [x] Place a marker object at a measured position; touch it 10 times; log error
 - **Pass:** median error ≤ 3 cm. **Fail →** guide to within 10 cm, then spoken touch-exploration
 
 ### G2 Mask → 3D target
@@ -54,7 +54,26 @@ Full plan (v2, reviewed): `docs/G1_PLAN.md`. Gate = median ≤ 3 cm **and** vali
 |---|---|---|---|---|---|
 | S0.1 | | | | | |
 | S0.2 | 2026-10-27 | **Pass** 5/5 masks on the named object (IMG_5770 also returned 2 lower-confidence false matches) | Spark 4.1–11.5 s (median 6.1 s); SAM 0.5–1.5 s | $0.043 for 5 images (~$0.009 each; Spark ~70%) | Ranked-list prompt; single-main-object prompt gave UNSURE 5/5 on cluttered rooms. Billing: $149.90 left after 21 calls (logged estimate $0.094) |
-| G1 | 2026-10-27 | **1/6 scenarios.** d50_a0: median 0.39 cm, mean 0.45, P90 ~0.8, max 0.85 (n=10); valid rate 91% | – | – | Camera→tip 0.56–0.59 m. Normal error −0.24 cm mean (tip slightly *below* the paper, not the expected +1 cm finger bias). In-plane 0.35 cm. Anchor jitter during capture 2.2–6.8 mm (start check only). All 11 failure samples `depth_invalid`; all 10 touches used the strict pass. Red dot sat on the fingertip at all 4 marker corners → orientation mapping OK. |
+| G1 | 2026-10-27 | **Pass.** 60 touches over 6 scenarios: median 1.43 cm, mean 1.24, P90 1.96, max 7.08; valid rate 91–100% per scenario | – | – | See "G1 per-scenario results" below. Distance in the scenario name is the phone *height*, not the camera→tip range. |
 | G2 | | | | | |
 | G3 | | | | | |
 | G4 | | | | | |
+
+### G1 per-scenario results (2026-10-27)
+
+Source: `logs/g1_touches_1793156688_70_0.csv` (a0 runs) and `logs/g1_touches_1793159488_30_45.csv` (a45 runs). Each later export contains the earlier rows of the same app session; the other CSVs are partial snapshots.
+
+| Scenario | Camera→tip | Median | Mean | P90 | Max | Normal err (mean) | Valid rate | Anchor jitter |
+|---|---|---|---|---|---|---|---|---|
+| d30_a0 | 0.35 m | 0.25 cm | 0.30 | 0.49 | 0.77 | −0.04 | 93% | 1.4–2.5 mm |
+| d50_a0 | 0.57 m | 0.39 | 0.45 | 0.79 | 0.85 | −0.24 | 91% | 2.2–6.8 |
+| d70_a0 | 0.70 m | 0.59 | 1.38 | 2.45 | 7.08 | −0.35 | 94% | 3.8–5.8 |
+| d30_a45 | 0.52 m | 1.71 | 1.74 | 1.87 | 1.99 | −1.30 | 100% | 1.1–1.9 |
+| d50_a45 | 0.76 m | 1.86 | 1.88 | 1.98 | 2.09 | −1.39 | 97% | 0.6–5.4 |
+| d70_a45 | 1.05 m | 1.60 | 1.67 | 2.07 | 2.18 | −1.40 | 98% | 8.1–17.2 |
+
+Findings:
+- **45° has a systematic bias of ~1.8 cm along the viewing ray (away from the camera).** The error vector is almost constant across touches (per-axis SD ≤ 0.2 cm): ~1.3 cm down and ~1.1 cm horizontal, i.e. the 45° ray direction. Likely cause: at an oblique view the pixels just past the fingertip see paper that is farther along the ray, and the smoothed LiDAR map blends finger and paper. Candidate fix (not done): sample depth a few pixels back from the tip toward the DIP joint, or take the near edge of the nearest cluster. Within the gate, so deferred.
+- **d70_a0 has one outlier (7.08 cm, in-plane)** and one at 1.94 cm; the other 8 are ≤ 1.3 cm. Most likely a touch off the crosshair or a Vision mislabel; Nils flagged this run as possibly mis-measured.
+- **Failure mix:** `depth_invalid` dominates at 0° (finger edge over flat paper); `low_hand_conf` dominates at 45° and at range. No touch needed the relaxed depth pass.
+- **Marker detection needs the camera close first (Nils, on device).** The image anchor was only found after bringing the phone close so the marker was large and in focus; then it kept tracking when moved back. Product impact: no printed marker in the real app, but Spark/SAM/Vision still need a sharp frame. Plan: keep ARKit autofocus on (default) and gate uploads on a simple sharpness check; tell the user to hold still for a moment before capture.
