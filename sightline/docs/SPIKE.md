@@ -36,7 +36,7 @@ Full plan and run steps: `docs/G2_PLAN.md`.
 - [x] Swift SAM parser + mask decoder (matches `meta-sam-parser` bit-for-bit on 7 real masks)
 - [x] Mask + LiDAR → 3D point (eroded mask, per-axis median), unit-tested
 - [x] G2 test screen: Lock + up to 4 re-measures, CSV, ≤ 5 SAM calls per launch
-- [ ] Device run (Nils): flat object, walk around ≥ 30 s
+- [x] Device run (Nils, 2026-10-28): book, 5 measures over 88 s → **Pass**
 - **Pass:** drift ≤ 3 cm over 30 s
 
 ### G3 Relocalization
@@ -59,7 +59,7 @@ Full plan and run steps: `docs/G2_PLAN.md`.
 | S0.1 | | | | | |
 | S0.2 | 2026-10-27 | **Pass** 5/5 masks on the named object (IMG_5770 also returned 2 lower-confidence false matches) | Spark 4.1–11.5 s (median 6.1 s); SAM 0.5–1.5 s | $0.043 for 5 images (~$0.009 each; Spark ~70%) | Ranked-list prompt; single-main-object prompt gave UNSURE 5/5 on cluttered rooms. Billing: $149.90 left after 21 calls (logged estimate $0.094) |
 | G1 | 2026-10-27 | **Pass.** 60 touches over 6 scenarios: median 1.43 cm, mean 1.24, P90 1.96, max 7.08; valid rate 91–100% per scenario | – | – | See "G1 per-scenario results" below. Distance in the scenario name is the phone *height*, not the camera→tip range. |
-| G2 | | | | | |
+| G2 | 2026-10-28 | **Pass.** Book on a table; 4 re-measures over 88 s from 4 viewpoints (range 0.69–1.23 m, camera moved up to ~1.5 m): distance to first lock 1.01, 1.08, 0.99, 0.78 cm (max 1.08 cm, gate 3 cm). Return-to-start drift 0.78 cm | SAM 0.7–2.6 s (median 1.6 s) | 5 × $0.0025 | See "G2 results" below |
 | G3 | | | | | |
 | G4 | | | | | |
 
@@ -81,3 +81,21 @@ Findings:
 - **d70_a0 has one outlier (7.08 cm, in-plane)** and one at 1.94 cm; the other 8 are ≤ 1.3 cm. Most likely a touch off the crosshair or a Vision mislabel; Nils flagged this run as possibly mis-measured.
 - **Failure mix:** `depth_invalid` dominates at 0° (finger edge over flat paper); `low_hand_conf` dominates at 45° and at range. No touch needed the relaxed depth pass.
 - **Marker detection needs the camera close first (Nils, on device).** The image anchor was only found after bringing the phone close so the marker was large and in focus; then it kept tracking when moved back. Product impact: no printed marker in the real app, but Spark/SAM/Vision still need a sharp frame. Plan: keep ARKit autofocus on (default) and gate uploads on a simple sharpness check; tell the user to hold still for a moment before capture.
+
+### G2 results (2026-10-28)
+
+Source: `logs/g2_targets_1793197873.csv`. All 5 calls succeeded, SAM confidence 0.94–0.97, tracking normal throughout.
+
+| # | Elapsed | Camera→target | Mask px | Depth samples | Depth spread | Δ first lock |
+|---|---|---|---|---|---|---|
+| 0 | 0 s | 0.69 m | 7523 | 1586 | 12.9 cm | — |
+| 1 | 48 s | 0.71 | 7417 | 1602 | 6.3 | 1.01 cm |
+| 2 | 61 s | 0.81 | 5562 | 1172 | 9.9 | 1.08 |
+| 3 | 78 s | 1.23 | 2068 | 390 | 14.8 | 0.99 |
+| 4 | 88 s | 0.75 | 6393 | 1390 | 11.3 | 0.78 |
+
+Findings:
+- World-space target from one SAM call stays within ~1 cm across viewpoints and 88 s. The core "lock once, guide locally" architecture holds; no need to re-call SAM just for drift.
+- `depth_spread` (P90 − P10 of depth) is 6–15 cm even on a flat book. That is expected for an oblique view of a ~25 cm object (depth varies across its surface), so it is **not** a mixing indicator as designed. Replace with a plane-fit residual or distance spread around the median point if we need a quality signal.
+- Measure #1 returned 2 instances; the highest-confidence one (0.965) was correct.
+- Phone-side `api_calls.csv` was not copied into `logs/` this time; costs above are from the call count.
