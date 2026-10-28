@@ -54,7 +54,7 @@ Full plan (v2, reviewed): `docs/G1_PLAN.md`. Gate = median ≤ 3 cm **and** vali
 |---|---|---|---|---|---|
 | S0.1 | | | | | |
 | S0.2 | 2026-10-27 | **Pass** 5/5 masks on the named object (IMG_5770 also returned 2 lower-confidence false matches) | Spark 4.1–11.5 s (median 6.1 s); SAM 0.5–1.5 s | $0.043 for 5 images (~$0.009 each; Spark ~70%) | Ranked-list prompt; single-main-object prompt gave UNSURE 5/5 on cluttered rooms. Billing: $149.90 left after 21 calls (logged estimate $0.094) |
-| G1 | | | | | |
+| G1 | 2026-10-27 | **1/6 scenarios.** d50_a0: median 0.39 cm, mean 0.45, P90 ~0.8, max 0.85 (n=10); valid rate 91% | – | – | Camera→tip 0.56–0.59 m. Normal error −0.24 cm mean (tip slightly *below* the paper, not the expected +1 cm finger bias). In-plane 0.35 cm. Anchor jitter during capture 2.2–6.8 mm (start check only). All 11 failure samples `depth_invalid`; all 10 touches used the strict pass. Red dot sat on the fingertip at all 4 marker corners → orientation mapping OK. |
 | G2 | | | | | |
 | G3 | | | | | |
 | G4 | | | | | |
