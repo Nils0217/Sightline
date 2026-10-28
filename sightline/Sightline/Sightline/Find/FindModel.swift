@@ -22,7 +22,7 @@ import UIKit
 @Observable
 final class FindModel {
     enum Phase: String {
-        case idle, listening, locating, guiding, grabbing, verifying, done
+        case idle, listening, locating, searching, guiding, grabbing, verifying, done
     }
 
     static let maxSAMCalls = 5
@@ -51,6 +51,15 @@ final class FindModel {
     @ObservationIgnored private let input = SpeechInput()
     @ObservationIgnored private var guide: GuidanceSession?
     @ObservationIgnored private var doneAt: Date?
+    /// Keep-scanning state while the object is not in view (ScanPlanner decides when to call SAM).
+    @ObservationIgnored private var scan: ScanPlanner?
+    @ObservationIgnored private var scanInFlight = false
+    @ObservationIgnored private var scanCalls = 0
+    /// The current hold check came from GuidanceSession (hand left the object), not from a tap.
+    @ObservationIgnored private var checkFromSession = false
+    /// Where each object was last locked during this app launch (world space; not across launches:
+    /// loading the G3 world map at start would block tracking in any other room).
+    @ObservationIgnored private var lastSeen: [String: SIMD3<Float>] = [:]
     @ObservationIgnored private var resumePhase = Phase.grabbing
     @ObservationIgnored private var lastFrameTime: Double = 0
     @ObservationIgnored private let recorder = DiagnosticRecorder()
@@ -118,7 +127,7 @@ final class FindModel {
             startHoldCheck()
         case .guiding where (handDistance ?? .infinity) <= Self.verifyTapRadius:
             startHoldCheck()
-        case .guiding, .locating:
+        case .guiding, .locating, .searching:
             finish(spoken: "Stopped.", event: "stop")
         case .listening, .verifying:
             break
@@ -128,12 +137,13 @@ final class FindModel {
     // MARK: Hold check (tap -> Muse Spark yes/no on the hand region)
 
     /// The user thinks they have it: photo of the next frame, crop around the hand, Spark (minimal) yes/no.
-    private func startHoldCheck() {
+    private func startHoldCheck(fromSession: Bool = false) {
+        checkFromSession = fromSession
         resumePhase = phase == .done ? .done : .grabbing
         phase = .verifying
         tones.stop()
-        speaker.say("Checking.", interrupt: true)
-        log("hold_check", "")
+        if !fromSession { speaker.say("Checking.", interrupt: true) }  // the session already said it
+        log("hold_check", fromSession ? "hand left the object" : "tap")
         processor.requestCapture("hold_check")
         // No photo (e.g. no depth this frame) or Spark too slow: give the button back.
         let id = sessionID
@@ -155,6 +165,18 @@ final class FindModel {
             guard id == sessionID, phase == .verifying else { return }
             let result = answer.flatMap { $0 }
             log("hold_check_result", result.map { $0 ? "yes" : "no" } ?? "unclear")
+            if checkFromSession, var session = guide {
+                checkFromSession = false
+                let lines = session.resolveCheck(result, time: lastFrameTime)
+                guide = session
+                lines.forEach(say)
+                switch session.phase {
+                case .done: finish(spoken: nil, event: "hold_yes")
+                case .grabbing: phase = .grabbing
+                default: phase = .guiding
+                }
+                return
+            }
             switch result {
             case true?:
                 finish(spoken: "Yes, that's the \(noun). Well done.", event: "hold_yes")
@@ -208,8 +230,15 @@ final class FindModel {
         target = nil
         candidates = []
         samCalls = 0
+        scanCalls = 0
+        scan = nil
+        scanInFlight = false
+        checkFromSession = false
         guide = nil
         guidePhase = "-"
+        // A limited-tracking moment before this search must not trigger a re-lock (2026-10-28 log:
+        // an extra SAM call 2 s into the search with tracking normal).
+        wasTrackingLimited = false
         processor.target = nil
         sessionStart = Date()
         phase = .locating
@@ -243,6 +272,9 @@ final class FindModel {
         /// SAM box on the uploaded image (pixels), for the verification crop.
         var box: CGRect
         var recorded: RecordedCandidate
+        /// 3D shape + support plane (guidance to the nearest surface, fingertip grasp check).
+        var object: ObjectModel?
+        var obstacles: ObstacleMap?
     }
 
     /// Below this SAM confidence, Spark checks the crop before we trust it (the first device test
@@ -250,8 +282,9 @@ final class FindModel {
     static let verifyBelow: Float = 0.75
 
     /// One SAM call on the current frame -> up to 4 candidates in 3D, most confident first.
-    private func segment(_ noun: String) async -> Result<[Candidate], FindError> {
-        guard samCalls < Self.maxSAMCalls else { return .failure(FindError("budget")) }
+    /// `scanning`: counted against the scan budget (ScanPlanner) instead of `maxSAMCalls`.
+    private func segment(_ noun: String, scanning: Bool = false) async -> Result<[Candidate], FindError> {
+        guard scanning || samCalls < Self.maxSAMCalls else { return .failure(FindError("budget")) }
         var snapshot: FrameSnapshot?
         for _ in 0..<10 {
             if let frame = session.currentFrame, let s = try? FrameSnapshot.make(from: frame, tracking: tracking) {
@@ -261,7 +294,7 @@ final class FindModel {
             try? await Task.sleep(for: .milliseconds(200))
         }
         guard let s = snapshot else { return .failure(FindError("no_frame")) }
-        samCalls += 1
+        if scanning { scanCalls += 1 } else { samCalls += 1 }
         lastJPEG = s.jpeg
         do {
             let response = try await MetaAPI.segment(noun: noun, jpeg: s.jpeg, imageLabel: "find_\(sessionID)_\(samCalls)")
@@ -269,7 +302,16 @@ final class FindModel {
             for c in list where c.recorded.reprojectsInsideMask == false {
                 log("target_outside_mask", "id \(c.info.id)")
             }
-            record(kind: "sam", snapshot: s, samText: response.text, candidates: list.map(\.recorded), hand: nil)
+            var extra: [String: Any] = ["scanning": scanning]
+            if let o = list.first?.object {
+                extra["object_flat"] = o.isFlat
+                extra["object_support_y"] = o.supportHeight ?? NSNull()
+                extra["object_size_m"] = [o.size.x, o.size.y, o.size.z]
+                extra["object_centre"] = [o.centre.x, o.centre.y, o.centre.z]
+                extra["obstacle_points"] = list.first?.obstacles?.points.count ?? 0
+            }
+            record(kind: scanning ? "scan" : "sam", snapshot: s, samText: response.text, candidates: list.map(\.recorded),
+                   hand: nil, extra: extra)
             return list.isEmpty ? .failure(FindError("no_object")) : .success(list)
         } catch {
             return .failure(FindError("api_error"))
@@ -296,7 +338,12 @@ final class FindModel {
             let recorded = RecordedCandidate(id: r.id, confidence: r.confidence ?? 0, world: world, cameraPoint: hit.cameraPoint,
                                              samples: hit.samples, depthSpread: hit.depthSpread, box: box, mask: mask,
                                              reprojected: check?.pixel, reprojectsInsideMask: check?.inside, chosen: index == 0)
-            return Candidate(info: info, world: world, box: box, recorded: recorded)
+            let object = ObjectModel.build(mask: mask, depth: s.depth, intrinsics: s.intrinsics, cameraTransform: t)
+            let obstacles = object.flatMap {
+                ObstacleMap.build(mask: mask, depth: s.depth, intrinsics: s.intrinsics, cameraTransform: t, object: $0)
+            }
+            return Candidate(info: info, world: object?.centre ?? world, box: box, recorded: recorded,
+                             object: object, obstacles: obstacles)
         }
     }
 
@@ -307,31 +354,85 @@ final class FindModel {
         switch result {
         case .failure(let error):
             log("sam_lock_fail", error.reason)
-            phase = .idle
-            speaker.say("I can't see the \(noun). Turn slowly, then tap and ask again.", interrupt: true)
+            startScan(noun)
         case .success(let list):
-            candidates = list
             log("sam_lock", "\(list.count) candidates")
-            if AgentTools.isAmbiguous(list.map(\.info.confidence)) {
-                speaker.say("I see more than one \(noun). Checking.")
-                await runAgent(prompt: "The user said: \"\(lastHeard)\". SAM found several \(noun) candidates "
-                               + "(call get_state; the photo is what the chest camera sees). Select the one they mean, or ask them.",
-                               jpeg: lastJPEG, effort: .medium)
-            } else if list[0].info.confidence < Self.verifyBelow {
-                speaker.say("Checking.")
-                let ok = await verify(noun: noun, candidate: list[0])
-                guard id == sessionID, phase == .locating else { return }
-                log("verify", "c \(list[0].info.confidence) -> \(ok.map { $0 ? "yes" : "no" } ?? "error")")
-                if ok == false {
-                    phase = .idle
-                    speaker.say("I can't see the \(noun). Turn slowly, then tap and ask again.", interrupt: true)
-                } else {
-                    select(list[0])
+            await decide(list, noun: noun)
+        }
+    }
+
+    /// SAM found something: pick it (fast path), ask Spark to choose (several), or check it (unsure).
+    /// A "no" from the check goes back to scanning.
+    private func decide(_ list: [Candidate], noun: String) async {
+        let id = sessionID
+        candidates = list
+        if AgentTools.isAmbiguous(list.map(\.info.confidence)) {
+            speaker.say("I see more than one \(noun). Checking.")
+            await runAgent(prompt: "The user said: \"\(lastHeard)\". SAM found several \(noun) candidates "
+                           + "(call get_state; the photo is what the chest camera sees). Select the one they mean, or ask them.",
+                           jpeg: lastJPEG, effort: .medium)
+        } else if list[0].info.confidence < Self.verifyBelow {
+            speaker.say("Checking.")
+            let ok = await verify(noun: noun, candidate: list[0])
+            guard id == sessionID, phase == .locating else { return }
+            log("verify", "c \(list[0].info.confidence) -> \(ok.map { $0 ? "yes" : "no" } ?? "error")")
+            if ok == false { startScan(noun) } else { select(list[0]) }
+        } else {
+            select(list[0])
+        }
+    }
+
+    // MARK: Keep scanning (object not in view)
+
+    /// Not found in this view: keep looking while the user turns, one SAM call per new steady view.
+    private func startScan(_ noun: String) {
+        var planner = ScanPlanner(time: lastFrameTime)
+        planner.markSearched(cameraTransform: lastCamera)
+        scan = planner
+        scanInFlight = false
+        phase = .searching
+        log("scan_start", "")
+        say(SpokenLine(text: ScanPlanner.startLine(noun), interrupt: true))
+    }
+
+    private func stepScan(_ f: FindFrame) {
+        guard var planner = scan, let noun = targetName else { return }
+        let step = planner.update(time: f.time, cameraTransform: f.cameraTransform, busy: scanInFlight, speaking: speaker.isSpeaking)
+        scan = planner
+        switch step {
+        case .wait:
+            break
+        case .prompt:
+            say(SpokenLine(text: ScanPlanner.promptLine, interrupt: false))
+        case .giveUp:
+            var text = ScanPlanner.giveUpLine(noun)
+            if let p = lastSeen[noun] { text = Self.earlierLine(p, cameraTransform: f.cameraTransform) + " " + text }
+            finish(spoken: text, event: "scan_give_up")
+        case .scan:
+            scanInFlight = true
+            tones.click()
+            let id = sessionID
+            Task {
+                let result = await segment(noun, scanning: true)
+                guard id == sessionID, phase == .searching else { return }
+                scanInFlight = false
+                switch result {
+                case .success(let list):
+                    log("scan_found", "\(list.count) candidates, sectors \(scan?.sectorsCovered ?? 0)")
+                    scan = nil
+                    phase = .locating
+                    await decide(list, noun: noun)
+                case .failure(let error):
+                    log("scan_nothing", error.reason)
                 }
-            } else {
-                select(list[0])
             }
         }
+    }
+
+    /// "Earlier, it was to your right, about 60 centimetres."
+    nonisolated static func earlierLine(_ p: SIMD3<Float>, cameraTransform t: simd_float4x4) -> String {
+        let found = GuidanceSession.whereIs(target: p, cameraTransform: t, name: "x")
+        return "Earlier, " + found.replacingOccurrences(of: "Found the x. It's", with: "it was")
     }
 
     /// Muse Spark (minimal) yes/no on a crop around the SAM box. nil = could not check.
@@ -353,8 +454,14 @@ final class FindModel {
         processor.target = c.world
         phase = .guiding
         log("target", "id \(c.info.id) c \(c.info.confidence)")
-        let session = GuidanceSession(targetName: targetName ?? "object", target: c.world,
-                                      cameraTransform: lastCamera, time: lastFrameTime)
+        if let name = targetName { lastSeen[name] = c.world }
+        log("object", c.object.map { o in
+            String(format: "%@ size %.0fx%.0fx%.0f cm support %@ obstacles %d", o.isFlat ? "flat" : "solid",
+                   o.size.x * 100, o.size.y * 100, o.size.z * 100,
+                   o.supportHeight.map { String(format: "%.2f", $0) } ?? "none", c.obstacles?.points.count ?? 0)
+        } ?? "no model (centre only)")
+        let session = GuidanceSession(targetName: targetName ?? "object", target: c.world, object: c.object,
+                                      obstacles: c.obstacles, cameraTransform: lastCamera, time: lastFrameTime)
         guide = session
         guidePhase = session.phase.rawValue
         if let intro { say(SpokenLine(text: intro, interrupt: true)) }
@@ -505,6 +612,10 @@ final class FindModel {
                            "target_world": target.map { [$0.x, $0.y, $0.z] } ?? []])
             if capture.kind == "hold_check" { runHoldCheck(capture.snapshot, handVision: f.handVision) }
         }
+        if phase == .searching {
+            stepScan(f)
+            return
+        }
         guard phase == .guiding || phase == .grabbing, var session = guide else {
             handDistance = nil
             return
@@ -526,9 +637,15 @@ final class FindModel {
             if line.text == "I see your hand." { processor.requestCapture("hand_seen") }
             if line.text.hasPrefix("Stop. It's at your hand") { processor.requestCapture("grab") }
         }
+        if out.requestCheck {
+            startHoldCheck(fromSession: true)
+            return
+        }
         switch out.phase {
         case .grabbing:
             phase = .grabbing
+        case .checking:
+            break
         case .done:
             finish(spoken: nil, event: "pickup")
         case .gaveUp:
@@ -552,7 +669,8 @@ final class FindModel {
 
     /// Log CSV and the diagnostics folder of this launch, for the Export button.
     var exportURLs: [URL] {
-        [logURL, FileManager.default.fileExists(atPath: recorder.folder.path) ? recorder.folder : nil].compactMap { $0 }
+        [logURL, FileManager.default.fileExists(atPath: recorder.folder.path) ? recorder.folder : nil,
+         FileManager.default.fileExists(atPath: ApiCallLog.url.path) ? ApiCallLog.url : nil].compactMap { $0 }
     }
 
     /// `spoken` nil: the line was already said (GuidanceSession's "Got it").

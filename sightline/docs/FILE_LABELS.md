@@ -57,6 +57,9 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `Packages/SightlineCore/Tests/` | testing, needs-review | Swift Testing suites (`swift test`) |
 | `Packages/SightlineCore/Sources/SightlineCore/GuidanceSession.swift` | production, needs-review, important | Local find-and-grab state machine (opening lines, hand prompt, stop-and-go, pick-up); shared by app and simulator |
 | `Packages/SightlineCore/Sources/SightlineCore/HandModel.swift` | production, needs-review, important | Six hand keypoints (5 fingertips + palm centre) from Vision's 21 joints |
+| `Packages/SightlineCore/Sources/SightlineCore/ObjectModel.swift` | production, needs-review, important | Target as a 3D shape + support plane; fingertip grasp check; obstacle map |
+| `Packages/SightlineCore/Sources/SightlineCore/ScanPlanner.swift` | production, needs-review, important | Keep-scanning: when a new view deserves a SAM call; scan phrases |
+| `Packages/SightlineCore/Sources/SightlineSim/Replay.swift` | testing, needs-review | `SightlineSim replay <folder>`: object model + grasp check on a device recording (read-only) |
 | `Packages/SightlineCore/Sources/SightlineSim/` | testing, needs-review, important | Mac simulator of the guidance loop: `swift run SightlineSim` (stdout only, writes no files) |
 | `Sightline/Sightline.xcodeproj` | production, config | Xcode project |
 | `Sightline/Sightline/SightlineApp.swift` | production | App entry |

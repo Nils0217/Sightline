@@ -1,6 +1,7 @@
 // labels: production, needs-review
 // Parking-sensor beeps: interval and pitch from SightlineCore.ProximityTone. Generated on the
-// audio thread; the main thread only writes the target distance.
+// audio thread; the main thread only writes the target distance. `click()` = one short low tick
+// ("I'm looking at this view") while scanning for an object that is not in view.
 
 import AVFoundation
 import SightlineCore
@@ -14,6 +15,12 @@ final class TonePlayer {
     func update(distance: Float?) {
         state.set(distance: distance)
         if distance != nil, !engine.isRunning { start() }
+    }
+
+    /// One 30 ms 300 Hz tick.
+    func click() {
+        state.click()
+        if !engine.isRunning { start() }
     }
 
     func stop() {
@@ -46,13 +53,21 @@ private nonisolated final class ToneState: @unchecked Sendable {
     private var distance: Float?
     private var phase: Double = 0
     private var sinceBeep: Double = 1
+    /// Seconds of click left to play.
+    private var clickLeft: Double = 0
 
     static let beepLength = 0.05
 
     func set(distance: Float?) { lock.withLock { self.distance = distance } }
+    func click() { lock.withLock { clickLeft = 0.03 } }
 
     func render(frameCount: Int, sampleRate: Double, buffers: UnsafeMutableAudioBufferListPointer) {
-        let d = lock.withLock { distance }
+        let (d, click) = lock.withLock { () -> (Float?, Double) in
+            let c = clickLeft
+            clickLeft = max(0, clickLeft - Double(frameCount) / sampleRate)  // a click spans several buffers
+            return (distance, c)
+        }
+        var clickRemaining = click
         let interval = d.flatMap { ProximityTone.interval(distance: $0) }
         let freq = d.map { ProximityTone.frequency(distance: $0) } ?? 0
         let dt = 1 / sampleRate
@@ -66,6 +81,12 @@ private nonisolated final class ToneState: @unchecked Sendable {
                     if phase > 2 * .pi { phase -= 2 * .pi }
                     sample = Float(sin(phase)) * 0.12
                 }
+            }
+            if clickRemaining > 0 {
+                clickRemaining -= dt
+                phase += 2 * .pi * 300 * dt
+                if phase > 2 * .pi { phase -= 2 * .pi }
+                sample = Float(sin(phase)) * 0.15
             }
             for buffer in buffers {
                 buffer.mData?.assumingMemoryBound(to: Float.self)[i] = sample

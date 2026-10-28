@@ -30,7 +30,7 @@ struct FindView: View {
         case .listening: "Listening"
         case .grabbing: "Check what I'm holding"
         case .verifying: "Checking"
-        case .locating, .guiding: "Stop"
+        case .locating, .guiding, .searching: "Stop"
         }
     }
 
@@ -69,6 +69,7 @@ struct FindView: View {
         case .idle: "Tap anywhere and speak"
         case .listening: "Listening…"
         case .locating: "Looking for the \(model.targetName ?? "object")…"
+        case .searching: "Scanning — turn slowly"
         case .guiding: "Guiding to the \(model.targetName ?? "object")"
         case .grabbing: "Grab it — tap to check it"
         case .verifying: "Checking what you hold…"
