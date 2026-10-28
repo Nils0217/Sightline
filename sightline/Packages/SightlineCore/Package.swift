@@ -9,9 +9,12 @@ let package = Package(
     platforms: [.iOS(.v17), .macOS(.v14)],
     products: [
         .library(name: "SightlineCore", targets: ["SightlineCore"]),
+        .executable(name: "SightlineSim", targets: ["SightlineSim"]),
     ],
     targets: [
         .target(name: "SightlineCore"),
+        // Mac-only simulator of the local guidance loop: `swift run SightlineSim`.
+        .executableTarget(name: "SightlineSim", dependencies: ["SightlineCore"]),
         .testTarget(name: "SightlineCoreTests", dependencies: ["SightlineCore"],
                     resources: [.copy("Fixtures")]),
     ]

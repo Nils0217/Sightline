@@ -39,14 +39,18 @@ public struct StepGuide: Sendable {
 
     public private(set) var state = State.ready
     private var lastSeen: Double?
-    private var lastOffset: BodyOffset?
-    private var lastTime: Double?
+    /// Recent (time, offset) samples for the speed estimate.
+    private var history: [(Double, BodyOffset)] = []
+    /// Speed is measured over this window, not frame to frame: hand keypoints jitter a few mm per
+    /// frame, which at 30 Hz reads as ~0.3 m/s and the hand never looked still (found in SightlineSim).
+    public var speedWindow: Double = 0.3
     private var stillSince: Double?
     private var lastNoHandCue: Double?
 
     public init() {}
 
-    public mutating func update(time: Double, offset: BodyOffset?) -> GuidanceCue? {
+    /// - Parameter canInstruct: false while speech is playing; new instructions wait (Stop/Grab never do).
+    public mutating func update(time: Double, offset: BodyOffset?, canInstruct: Bool = true) -> GuidanceCue? {
         guard state != .grabbing else { return nil }
         guard let offset else { return noHand(time) }
         let speed = trackSpeed(time: time, offset: offset)
@@ -61,18 +65,20 @@ public struct StepGuide: Sendable {
         switch state {
         case .grabbing:
             return nil
-        case .moving(let axis, let sign, let issuedAt):
+        case .moving(let axis, let sign, var issuedAt):
+            // The "stopped short" clock starts when the instruction has been heard, not queued.
+            if !canInstruct { issuedAt = time; state = .moving(axis, sign: sign, issuedAt: time) }
             if Self.value(offset, axis) * sign <= axisTolerance {
                 state = .ready
                 stillSince = nil  // wait for the hand to settle after "Stop."
                 return GuidanceCue(kind: .stop, phrase: "Stop.", key: "stop")
             }
-            if still && speed < stillSpeed && time - issuedAt >= stalledAfter {
+            if canInstruct && still && speed < stillSpeed && time - issuedAt >= stalledAfter {
                 return instruct(offset, time: time)
             }
             return nil
         case .ready:
-            return still ? instruct(offset, time: time) : nil
+            return still && canInstruct ? instruct(offset, time: time) : nil
         }
     }
 
@@ -111,9 +117,13 @@ public struct StepGuide: Sendable {
         }
     }
 
+    /// Vision misses single frames; shorter gaps than this keep the speed history.
+    public var dropoutTolerance: Double = 0.5
+
     private mutating func noHand(_ time: Double) -> GuidanceCue? {
+        if let seen = lastSeen, time - seen < dropoutTolerance { return nil }
         stillSince = nil
-        lastOffset = nil
+        history.removeAll()
         if let seen = lastSeen, time - seen < noHandGrace { return nil }
         if lastSeen == nil, lastNoHandCue == nil { lastNoHandCue = time; return nil }  // grace from the start too
         if let said = lastNoHandCue, time - said < noHandRepeat { return nil }
@@ -122,8 +132,9 @@ public struct StepGuide: Sendable {
     }
 
     private mutating func trackSpeed(time: Double, offset: BodyOffset) -> Float {
-        defer { lastOffset = offset; lastTime = time }
-        guard let prev = lastOffset, let t0 = lastTime, time > t0 else { stillSince = nil; return .infinity }
+        history.append((time, offset))
+        while history.count > 2, time - history[1].0 >= speedWindow { history.removeFirst() }
+        guard let (t0, prev) = history.first, time - t0 >= speedWindow * 0.5 else { stillSince = nil; return .infinity }
         let d = SIMD3(offset.right - prev.right, offset.up - prev.up, offset.forward - prev.forward)
         let speed = simd_length(d) / Float(time - t0)
         if speed < stillSpeed {

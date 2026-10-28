@@ -55,6 +55,9 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `Packages/SightlineCore/Tests/SightlineCoreTests/Fixtures/` | testing, generated | Real SAM outputs + expected decodes from the Python parser |
 | `Packages/SightlineCore/` | production, needs-review, important | Pure geometry / sampling / stats; unit-tested on Mac |
 | `Packages/SightlineCore/Tests/` | testing, needs-review | Swift Testing suites (`swift test`) |
+| `Packages/SightlineCore/Sources/SightlineCore/GuidanceSession.swift` | production, needs-review, important | Local find-and-grab state machine (opening lines, hand prompt, stop-and-go, pick-up); shared by app and simulator |
+| `Packages/SightlineCore/Sources/SightlineCore/HandModel.swift` | production, needs-review, important | Six hand keypoints (5 fingertips + palm centre) from Vision's 21 joints |
+| `Packages/SightlineCore/Sources/SightlineSim/` | testing, needs-review, important | Mac simulator of the guidance loop: `swift run SightlineSim` (stdout only, writes no files) |
 | `Sightline/Sightline.xcodeproj` | production, config | Xcode project |
 | `Sightline/Sightline/SightlineApp.swift` | production | App entry |
 | `Sightline/Sightline/ContentView.swift` | production, needs-review | Root screen; Find + G1/G2/G3 tabs |
