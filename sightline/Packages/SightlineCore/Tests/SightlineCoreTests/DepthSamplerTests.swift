@@ -14,7 +14,30 @@ func image(fill: Float, conf: UInt8 = 2, overrides: [(Int, Int, Float, UInt8)] =
 }
 
 @Suite struct DepthSamplerTests {
-    let sampler = DepthSampler()
+    /// Strict pass only, as originally specified.
+    let sampler: DepthSampler = {
+        var s = DepthSampler()
+        s.fallback = nil
+        return s
+    }()
+
+    @Test func fallbackUsesMediumConfidenceInWiderWindow() throws {
+        // Only 2 high-confidence pixels in the 3x3, but the 5x5 has plenty of medium ones.
+        let img = image(fill: 0.5, conf: 1, overrides: [(2, 2, 0.5, 2), (1, 2, 0.5, 2)])
+        let s = try DepthSampler().sample(img, at: SIMD2(2, 2)).get()
+        #expect(s.relaxed)
+        #expect(s.validSamples == 25)
+        #expect(s.depth == 0.5)
+    }
+
+    @Test func fallbackStillRejectsLowConfidence() {
+        let img = image(fill: 0.5, conf: 0)
+        #expect(DepthSampler().sample(img, at: SIMD2(2, 2)) == .failure(.depthInvalid))
+    }
+
+    @Test func strictPassWinsWhenItSucceeds() throws {
+        #expect(try !DepthSampler().sample(image(fill: 0.5), at: SIMD2(2, 2)).get().relaxed)
+    }
 
     @Test func uniformSurface() throws {
         let s = try sampler.sample(image(fill: 0.5), at: SIMD2(2, 2)).get()

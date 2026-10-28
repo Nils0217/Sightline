@@ -31,6 +31,8 @@ public struct DepthSample: Sendable, Equatable {
     public let depth: Float
     /// Samples that passed validity and confidence checks (before clustering).
     public let validSamples: Int
+    /// True when the strict pass failed and the wider, medium-confidence pass was used.
+    public var relaxed = false
 }
 
 public struct DepthSampler: Sendable {
@@ -42,11 +44,24 @@ public struct DepthSampler: Sendable {
     public var minValidSamples = 3
     /// Samples farther than this behind the nearest one belong to the background (e.g. table).
     public var clusterWindow: Float = 0.02
+    /// Fallback pass when the strict pass fails: 5x5, medium confidence. nil = no fallback.
+    /// Added after the first device test (2026-10-27): fingertip edges are rarely high confidence,
+    /// so the strict pass alone returned depth_invalid most of the time.
+    public var fallback: (radius: Int, minConfidence: UInt8)? = (radius: 2, minConfidence: 1)
 
     public init() {}
 
-    /// Median depth of the nearest cluster around `pixel` (depth-map pixels, origin top-left).
+    /// Strict pass first, then the fallback pass if configured.
     public func sample(_ image: DepthImage, at pixel: SIMD2<Float>) -> Result<DepthSample, DepthSampleFailure> {
+        let strict = sample(image, at: pixel, radius: radius, minConfidence: minConfidence)
+        guard case .failure(.depthInvalid) = strict, let fallback else { return strict }
+        return sample(image, at: pixel, radius: fallback.radius, minConfidence: fallback.minConfidence)
+            .map { DepthSample(depth: $0.depth, validSamples: $0.validSamples, relaxed: true) }
+    }
+
+    /// Median depth of the nearest cluster around `pixel` (depth-map pixels, origin top-left).
+    func sample(_ image: DepthImage, at pixel: SIMD2<Float>, radius: Int,
+                minConfidence: UInt8) -> Result<DepthSample, DepthSampleFailure> {
         let cx = Int(pixel.x.rounded())
         let cy = Int(pixel.y.rounded())
         guard (0..<image.width).contains(cx), (0..<image.height).contains(cy) else {

@@ -18,6 +18,10 @@ nonisolated struct FrameMeasurement: Sendable {
     var tip: SIMD3<Float>?
     var tipDepth: Float?
     var validSamples = 0
+    /// Depth came from the wider medium-confidence fallback pass.
+    var depthRelaxed = false
+    /// Vision index tip, normalized portrait coordinates (origin bottom-left), for offset analysis.
+    var visionTip: SIMD2<Float>?
     /// nil = valid fingertip estimate. Values match docs/G1_PLAN.md `fail_reason`.
     var failReason: String?
     /// Set on the frame a dwell touch is captured (averaged fingertip position).
@@ -74,6 +78,7 @@ nonisolated final class FrameProcessor: NSObject, ARSessionDelegate, @unchecked 
             return finish(m)
         }
         m.handConfidence = tip.confidence
+        m.visionTip = tip.point
         guard tip.confidence >= Self.minHandConfidence else {
             m.failReason = "low_hand_conf"
             return finish(m)
@@ -101,6 +106,7 @@ nonisolated final class FrameProcessor: NSObject, ARSessionDelegate, @unchecked 
             m.tip = DepthProjector.world(fromCamera: cameraPoint, cameraTransform: frame.camera.transform)
             m.tipDepth = sample.depth
             m.validSamples = sample.validSamples
+            m.depthRelaxed = sample.relaxed
         }
         return finish(m)
     }

@@ -22,7 +22,7 @@ The 3 cm threshold is a **provisional engineering gate**, not a safety validatio
 ## Fingertip pipeline
 1. Vision `VNDetectHumanHandPoseRequest` on `capturedImage`, orientation `.right`; take `.indexTip`, require confidence ≥ 0.5.
 2. Convert the Vision point (normalized, origin bottom-left) to `capturedImage` pixels (1920 × 1440) and then to `sceneDepth` pixels (256 × 192).
-3. Depth: use `sceneDepth` (not `smoothedSceneDepth`, which lags a moving hand). Sample 3 × 3 around the tip, keep only pixels with `confidenceMap == .high`, take the median of the nearest cluster (within 2 cm of the minimum). Fewer than 3 valid samples → **fail, no estimate**.
+3. Depth: use `sceneDepth` (not `smoothedSceneDepth`, which lags a moving hand). Sample 3 × 3 around the tip, keep only pixels with `confidenceMap == .high`, take the median of the nearest cluster (within 2 cm of the minimum). Fewer than 3 valid samples → **fail, no estimate**. **Fallback (added 2026-10-27 after the first device test, where strict sampling gave mostly `depth_invalid`):** if the strict 3 × 3 high-confidence pass fails, retry 5 × 5 with medium confidence; flagged as `depth_relaxed=1` in the CSV so both can be compared.
 4. Unproject with the camera intrinsics scaled to depth resolution → camera space → world space via `camera.transform`.
 
 ## Capture
@@ -43,7 +43,7 @@ Per scenario and overall: median, mean, P90 of 3D error; error split into normal
 **Fail →** PRD fallback: guide to within 10 cm, then spoken touch exploration.
 
 ## CSV (`logs/g1_touches.csv`, exported from the app)
-`timestamp, scenario, distance_cm, angle_deg, ref_x, ref_y, ref_z, ref_jitter_mm, tip_x, tip_y, tip_z, err_3d_cm, err_normal_cm, err_plane_cm, hand_conf, depth_valid_samples, depth_m, tracking_state, fail_reason`
+`timestamp, scenario, distance_cm, angle_deg, ref_x, ref_y, ref_z, ref_jitter_mm, tip_x, tip_y, tip_z, err_3d_cm, err_normal_cm, err_plane_cm, hand_conf, depth_valid_samples, depth_relaxed, vision_x, vision_y, depth_m, tracking_state, fail_reason`
 
 `fail_reason`: empty | `no_hand` | `low_hand_conf` | `depth_invalid` | `tracking_limited` | `no_anchor`.
 

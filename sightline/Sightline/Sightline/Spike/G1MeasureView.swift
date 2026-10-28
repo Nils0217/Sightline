@@ -42,7 +42,7 @@ struct G1MeasureView: View {
         }()
         return VStack(alignment: .leading, spacing: 2) {
             Text("tracking \(m?.tracking ?? "-")  marker \(m?.reference == nil ? "not seen" : "tracked")  jitter \(m?.referenceJitterMM.map { String(format: "%.1f mm", $0) } ?? "-")")
-            Text("hand \(m?.handConfidence.map { String(format: "%.2f", $0) } ?? "-")  depth \(m?.tipDepth.map { String(format: "%.3f m", $0) } ?? "-")  samples \(m?.validSamples ?? 0)")
+            Text("hand \(m?.handConfidence.map { String(format: "%.2f", $0) } ?? "-")  depth \(m?.tipDepth.map { String(format: "%.3f m", $0) } ?? "-")  samples \(m?.validSamples ?? 0)\(m?.depthRelaxed == true ? " relaxed" : "")")
             Text("tip→ref \(distance)  \(m?.failReason ?? "ok")")
         }
     }

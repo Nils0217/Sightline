@@ -18,11 +18,13 @@ struct G1Row {
     var error: TouchError?
     var handConfidence: Float?
     var validSamples: Int
+    var depthRelaxed: Bool
+    var visionTip: SIMD2<Float>?
     var depth: Float?
     var tracking: String
     var failReason: String
 
-    static let header = "timestamp,scenario,distance_cm,angle_deg,ref_x,ref_y,ref_z,ref_jitter_mm,tip_x,tip_y,tip_z,err_3d_cm,err_normal_cm,err_plane_cm,hand_conf,depth_valid_samples,depth_m,tracking_state,fail_reason"
+    static let header = "timestamp,scenario,distance_cm,angle_deg,ref_x,ref_y,ref_z,ref_jitter_mm,tip_x,tip_y,tip_z,err_3d_cm,err_normal_cm,err_plane_cm,hand_conf,depth_valid_samples,depth_relaxed,vision_x,vision_y,depth_m,tracking_state,fail_reason"
 
     var csv: String {
         func f(_ v: Float?, _ digits: Int = 4) -> String { v.map { String(format: "%.\(digits)f", $0) } ?? "" }
@@ -32,7 +34,8 @@ struct G1Row {
             f(r?.x), f(r?.y), f(r?.z), f(referenceJitterMM, 1),
             f(t?.x), f(t?.y), f(t?.z),
             f(error.map { $0.total * 100 }, 2), f(error.map { $0.normal * 100 }, 2), f(error.map { $0.inPlane * 100 }, 2),
-            f(handConfidence, 2), "\(validSamples)", f(depth), tracking, failReason,
+            f(handConfidence, 2), "\(validSamples)", depthRelaxed ? "1" : "0",
+            f(visionTip?.x), f(visionTip?.y), f(depth), tracking, failReason,
         ].joined(separator: ",")
     }
 }
@@ -142,7 +145,8 @@ final class G1Model {
                 lastFailureLog = Date()
                 append(G1Row(timestamp: Date(), scenario: scenario, distanceCM: distanceCM, angleDeg: angleDeg,
                              reference: m.reference, referenceJitterMM: m.referenceJitterMM, tip: nil, error: nil,
-                             handConfidence: m.handConfidence, validSamples: m.validSamples, depth: m.tipDepth,
+                             handConfidence: m.handConfidence, validSamples: m.validSamples,
+                     depthRelaxed: m.depthRelaxed, visionTip: m.visionTip, depth: m.tipDepth,
                              tracking: m.tracking, failReason: reason))
             }
         }
@@ -159,7 +163,8 @@ final class G1Model {
         append(G1Row(timestamp: Date(), scenario: scenario, distanceCM: distanceCM, angleDeg: angleDeg,
                      reference: reference, referenceJitterMM: m.referenceJitterMM, tip: touch,
                      error: TouchError(tip: touch, reference: reference, planeNormal: normal),
-                     handConfidence: m.handConfidence, validSamples: m.validSamples, depth: m.tipDepth,
+                     handConfidence: m.handConfidence, validSamples: m.validSamples,
+                     depthRelaxed: m.depthRelaxed, visionTip: m.visionTip, depth: m.tipDepth,
                      tracking: m.tracking, failReason: ""))
         AudioServicesPlaySystemSound(1104)
         if touchesInScenario >= Self.touchesPerScenario {
