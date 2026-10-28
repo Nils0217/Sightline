@@ -66,10 +66,14 @@ final class FindModel {
         let config = ARWorldTrackingConfiguration()
         config.frameSemantics = [.sceneDepth]
         session.run(config)
-        try? AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .default,
-                                                         options: [.defaultToSpeaker, .duckOthers, .allowBluetoothA2DP])
-        try? AVAudioSession.sharedInstance().setActive(true)
         Task {
+            // Off the main thread: setActive can block the UI.
+            await Task.detached {
+                let audio = AVAudioSession.sharedInstance()
+                try? audio.setCategory(.playAndRecord, mode: .default,
+                                       options: [.defaultToSpeaker, .duckOthers, .allowBluetoothA2DP])
+                try? audio.setActive(true)
+            }.value
             if await SpeechInput.requestAuthorization() {
                 speaker.say("Sightline ready. Tap the screen and say what to find.")
             } else {
@@ -478,9 +482,11 @@ nonisolated struct FindFrame: Sendable {
     var targetDepthDelta: Float?
 }
 
-/// Runs the fingertip pipeline on every second frame (~30 Hz) off the main thread.
+/// Runs the fingertip pipeline on every second frame (≤ 30 Hz) off the main thread; drops frames
+/// while busy (FrameGate) so ARKit never waits on us.
 nonisolated final class FindFrameProcessor: NSObject, ARSessionDelegate, @unchecked Sendable {
-    let queue = DispatchQueue(label: "sightline.find.frames", qos: .userInteractive)
+    private let gate = FrameGate(label: "sightline.find.frames")
+    var queue: DispatchQueue { gate.delegateQueue }
     var onFrame: (@Sendable (FindFrame) -> Void)?
     private let locator: FingertipLocator = {
         var l = FingertipLocator()
@@ -500,10 +506,12 @@ nonisolated final class FindFrameProcessor: NSObject, ARSessionDelegate, @unchec
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         frameCount += 1
         guard frameCount % 2 == 0 else { return }
-        let r = locator.locate(in: frame)
-        onFrame?(FindFrame(time: frame.timestamp, tracking: FrameProcessor.describe(frame.camera.trackingState),
-                           cameraTransform: frame.camera.transform, tip: r.tip, handSource: r.source,
-                           targetDepthDelta: target.flatMap { depthDelta(at: $0, frame: frame) }))
+        gate.submit(frame) { [self] frame in
+            let r = locator.locate(in: frame)
+            onFrame?(FindFrame(time: frame.timestamp, tracking: FrameProcessor.describe(frame.camera.trackingState),
+                               cameraTransform: frame.camera.transform, tip: r.tip, handSource: r.source,
+                               targetDepthDelta: target.flatMap { depthDelta(at: $0, frame: frame) }))
+        }
     }
 
     /// Median LiDAR depth (medium+ confidence) in a 5x5 window at the target's pixel, minus the target's depth.

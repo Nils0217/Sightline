@@ -32,11 +32,13 @@ nonisolated final class FrameProcessor: NSObject, ARSessionDelegate, @unchecked 
     static let minHandConfidence = FingertipLocator.minHandConfidence
     static let jitterWindow: Double = 5
 
-    let queue = DispatchQueue(label: "sightline.frames", qos: .userInteractive)
+    private let gate = FrameGate(label: "sightline.frames")
+    /// ARSession delegate queue (cheap); state below is touched only on the gate's work queue.
+    var queue: DispatchQueue { gate.delegateQueue }
     private let onMeasurement: @Sendable (FrameMeasurement) -> Void
     private let locator = FingertipLocator()
 
-    // Accessed only on `queue`.
+    // `frameCount` lives on the delegate queue; dwell and anchorHistory on the gate's work queue.
     private var dwell = DwellDetector()
     private var anchorHistory: [(time: Double, centre: SIMD3<Float>)] = []
     private var frameCount = 0
@@ -56,7 +58,8 @@ nonisolated final class FrameProcessor: NSObject, ARSessionDelegate, @unchecked 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         frameCount += 1
         guard frameCount % 2 == 0 else { return }  // ~30 Hz is enough and keeps Vision cheap
-        onMeasurement(measure(frame))
+        // Work runs on the gate's serial queue; frames arriving while busy are dropped.
+        gate.submit(frame) { [self] frame in onMeasurement(measure(frame)) }
     }
 
     private func measure(_ frame: ARFrame) -> FrameMeasurement {
