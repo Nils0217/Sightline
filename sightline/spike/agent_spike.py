@@ -8,10 +8,14 @@ Responses API + function tools + previous_response_id. Tools are faked locally:
   - case "ambiguous": two cups, user wants the one on the left (effort medium, with a spike image)
 Prints each tool call and logs every call to logs/api_calls.csv. Cost: a few cents.
 
-Usage (from sightline/):  .venv/bin/python spike/agent_spike.py
+Usage (from sightline/):
+  .venv/bin/python spike/agent_spike.py                      # server keeps history (previous_response_id)
+  .venv/bin/python spike/agent_spike.py --manual-history     # we resend the history ourselves
+  add --state-in-prompt to put get_state's result in the first message (saves one turn)
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import time
@@ -51,21 +55,30 @@ def state(user_said, target, candidates):
     return json.dumps({"phase": "locating", "user_said": user_said, "target_name": target,
                        "candidates": candidates, "sam_calls_left": 4, "tracking": "normal"})
 
-def run(client, name, prompt, image_url, effort, fake):
-    print(f"\n=== {name} (effort {effort}) ===")
-    content = [{"type": "input_text", "text": INSTRUCTIONS + "\n\n" + prompt}]
+def run(client, name, prompt, image_url, effort, fake, manual=False, initial_state=None):
+    mode = "manual history" if manual else "previous_response_id"
+    print(f"\n=== {name} (effort {effort}, {mode}{', state in prompt' if initial_state else ''}) ===")
+    text = INSTRUCTIONS + "\n\n" + prompt
+    if initial_state:
+        text += "\n\nCurrent state (same as get_state): " + initial_state
+    content = [{"type": "input_text", "text": text}]
     if image_url:
         content.append({"type": "input_image", "image_url": image_url})
     inp = [{"type": "message", "role": "user", "content": content}]
     prev = None
+    history = list(inp)
+    total_ms = 0.0
     for turn in range(6):
         kwargs = dict(model=MODEL, input=inp, tools=TOOLS, parallel_tool_calls=False,
                       reasoning={"effort": effort}, max_output_tokens=1024 if effort == "minimal" else 4096)
-        if prev:
+        if manual:
+            kwargs["input"] = history
+        elif prev:
             kwargs["previous_response_id"] = prev
         t0 = time.perf_counter()
         r = client.responses.create(**kwargs)
         ms = (time.perf_counter() - t0) * 1000
+        total_ms += ms
         u = r.usage
         cost = u.input_tokens / 1e6 * SPARK_INPUT_PER_M + u.output_tokens / 1e6 * SPARK_OUTPUT_PER_M
         log_call(f"agent_spike_{name}", f"{MODEL}/{effort}", "agent", ms, u.input_tokens, u.output_tokens, cost)
@@ -74,6 +87,7 @@ def run(client, name, prompt, image_url, effort, fake):
         calls = [i for i in r.output if i.type == "function_call"]
         if not calls:
             print(f"  text: {r.output_text!r}")
+            print(f"total {total_ms/1000:.1f} s")
             return
         outs = []
         for c in calls:
@@ -81,13 +95,20 @@ def run(client, name, prompt, image_url, effort, fake):
             result = fake(c.name, json.loads(c.arguments or "{}"))
             if result is None:
                 print("  -> ends the turn")
+                print(f"total {total_ms/1000:.1f} s")
                 return
             print(f"  -> {result}")
             outs.append({"type": "function_call_output", "call_id": c.call_id, "output": result})
         inp = outs
+        history += [{"type": "function_call", "call_id": c.call_id, "name": c.name, "arguments": c.arguments} for c in calls]
+        history += outs
     print("turn limit")
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--manual-history", action="store_true")
+    ap.add_argument("--state-in-prompt", action="store_true")
+    args = ap.parse_args()
     client = OpenAI(base_url=BASE_URL, api_key=load_api_key())
 
     def unparsed(name, args):
@@ -100,7 +121,8 @@ def main():
             return "ok" if name == "say" else "yes"
         return None  # select_target / stop end the turn
     run(client, "unparsed", 'The user said: "I\'m thirsty, is there anything to drink". Work out which object they want, find it and select it. '
-        "If it is not a request to find an object, say so briefly and stop.", None, "minimal", unparsed)
+        "If it is not a request to find an object, say so briefly and stop.", None, "minimal", unparsed,
+        args.manual_history, state("I'm thirsty, is there anything to drink", None, []) if args.state_in_prompt else None)
 
     two_cups = [{"id": "0", "confidence": 0.82, "right_cm": -20, "up_cm": -30, "forward_cm": 40, "width_fraction": 0.12, "height_fraction": 0.18},
                 {"id": "1", "confidence": 0.79, "right_cm": 18, "up_cm": -30, "forward_cm": 55, "width_fraction": 0.1, "height_fraction": 0.15}]
@@ -116,7 +138,8 @@ def main():
     image = sorted(p for p in IMAGES_DIR.iterdir() if p.suffix.lower() in {".heic", ".jpg", ".jpeg", ".png"})[0]
     run(client, "ambiguous", 'The user said: "find the cup". SAM found several cup candidates '
         "(call get_state; the photo is what the chest camera sees). Select the one they mean, or ask them.",
-        to_data_url(downscale(image)), "medium", ambiguous)
+        to_data_url(downscale(image)), "medium", ambiguous,
+        args.manual_history, state("find the cup", "cup", two_cups) if args.state_in_prompt else None)
 
 if __name__ == "__main__":
     main()
