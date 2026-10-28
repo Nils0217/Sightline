@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # labels: spike, needs-review, sensitive (reads the API key; never prints it)
 """Smoke test for the Muse Spark commander's tool calling before running it on the phone.
 
