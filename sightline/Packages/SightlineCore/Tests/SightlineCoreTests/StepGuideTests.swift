@@ -47,7 +47,8 @@ import Testing
         var g = StepGuide()
         _ = hold(&g, BodyOffset(right: 0.3, up: 0, forward: 0), from: 0, to: 1)
         let cues = hold(&g, BodyOffset(right: 0.18, up: 0, forward: 0), from: 1, to: 3)
-        #expect(cues == ["Right, about 20 centimetres."])
+        // Same direction again: no new number, just keep going (2026-10-28 recording).
+        #expect(cues == ["Keep going right."])
     }
 
     @Test func grabWhenClose() {

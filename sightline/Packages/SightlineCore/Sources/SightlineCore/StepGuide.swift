@@ -46,6 +46,9 @@ public struct StepGuide: Sendable {
     public var speedWindow: Double = 0.3
     private var stillSince: Double?
     private var lastNoHandCue: Double?
+    /// Previous instruction, so a repeat after stopping short says "Keep going down." (2026-10-28
+    /// recording: "Down, about 40 centimetres." four times while the hand crept down 5–10 cm each time).
+    private var lastInstruction: (axis: Axis, sign: Float)?
 
     public init() {}
 
@@ -85,9 +88,22 @@ public struct StepGuide: Sendable {
     /// The caller lost the target (e.g. stopped); start over.
     public mutating func reset() { self = StepGuide() }
 
+    /// The caller decided the hand is at the object (fingertips on its surface).
+    public mutating func markGrabbing() { state = .grabbing }
+
+    /// The hand left without taking it: back to giving instructions.
+    public mutating func release() {
+        state = .ready
+        stillSince = nil
+        lastInstruction = nil
+    }
+
     private mutating func instruct(_ o: BodyOffset, time: Double) -> GuidanceCue {
         let (axis, v) = Self.dominantAxis(o, tolerance: axisTolerance)
-        state = .moving(axis, sign: v >= 0 ? 1 : -1, issuedAt: time)
+        let sign: Float = v >= 0 ? 1 : -1
+        let repeated = lastInstruction.map { $0.axis == axis && $0.sign == sign } ?? false
+        lastInstruction = (axis, sign)
+        state = .moving(axis, sign: sign, issuedAt: time)
         let cm = Int((abs(v) * 100).rounded())
         let word: String
         switch (axis, v >= 0) {
@@ -98,7 +114,10 @@ public struct StepGuide: Sendable {
         case (.forward, true): word = "Forward"
         case (.forward, false): word = "Back"
         }
-        let phrase = cm < 6 ? "A little \(word.lowercased())." : "\(word), about \(GuidanceController.rounded(cm)) centimetres."
+        let phrase: String
+        if cm < 6 { phrase = "A little \(word.lowercased())." }
+        else if repeated { phrase = "Keep going \(word.lowercased())." }
+        else { phrase = "\(word), about \(GuidanceController.rounded(cm)) centimetres." }
         return GuidanceCue(kind: .move, phrase: phrase, key: "\(word)-\(GuidanceController.rounded(cm))")
     }
 
