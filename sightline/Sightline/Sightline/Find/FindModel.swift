@@ -1,9 +1,11 @@
 // labels: production, needs-review, important
 // Find-and-grab session (PRD "Find and grab"):
 //   tap -> listen -> parse noun locally -> say "Looking for the cup" at once -> SAM on the
-//   current frame -> mask + LiDAR -> world target -> stop-and-go hand guidance (StepGuide:
-//   one instruction while the hand is still, silent while it moves, "Stop." on arrival)
-//   -> "Grab it" -> local pick-up detection (PickupDetector) -> "Got it." 
+//   current frame -> mask + LiDAR -> world target -> GuidanceSession (SightlineCore, same code
+//   as the Mac simulator): where the object is -> "Hold your hand out" -> "I see your hand" ->
+//   stop-and-go steps on the palm centre (six-point hand) -> "Grab it" -> pick-up -> "Got it."
+// Recording mode (DiagnosticRecorder) saves photo + SAM + overlay on every SAM call and on hand
+// events, for diagnosing the device left bias offline.
 // Muse Spark (tool calling, Find/AgentTools) steps in only off the fast path: commands the local
 // parser cannot read (effort minimal) and several plausible SAM matches (effort medium).
 // Cloud is called only on events (lock, re-lock after tracking recovers); ≤ 5 SAM calls per
@@ -13,6 +15,7 @@ import ARKit
 import AVFoundation
 import Foundation
 import Observation
+import RealityKit
 import SightlineCore
 import UIKit
 
@@ -27,9 +30,14 @@ final class FindModel {
     private(set) var phase = Phase.idle
     private(set) var targetName: String?
     private(set) var target: SIMD3<Float>?
-    private(set) var tip: SIMD3<Float>?
+    /// Palm-centre reference point (red dot) and visible fingertips (small dots), world space.
+    private(set) var palm: SIMD3<Float>?
+    private(set) var fingertips: [SIMD3<Float>] = []
     private(set) var handDistance: Float?
-    private(set) var handSource = "-"
+    /// "6/6" etc.: how many of the six keypoints are visible, or the reason none are.
+    private(set) var handStatus = "-"
+    private(set) var guidePhase = "-"
+    private(set) var recordings = 0
     private(set) var lastHeard = ""
     private(set) var lastCue = ""
     private(set) var tracking = "-"
@@ -41,10 +49,10 @@ final class FindModel {
     @ObservationIgnored private let speaker = Speaker()
     @ObservationIgnored private let tones = TonePlayer()
     @ObservationIgnored private let input = SpeechInput()
-    @ObservationIgnored private var guidance = StepGuide()
-    @ObservationIgnored private var pickup = PickupDetector()
-    @ObservationIgnored private var grabbingSince: Double?
-    @ObservationIgnored private var nudgedToTap = false
+    @ObservationIgnored private var guide: GuidanceSession?
+    @ObservationIgnored private var lastFrameTime: Double = 0
+    @ObservationIgnored private let recorder = DiagnosticRecorder()
+    @ObservationIgnored weak var arView: ARView?
     @ObservationIgnored private var lastCamera = matrix_identity_float4x4
     @ObservationIgnored private var sessionStart: Date?
     @ObservationIgnored private var wasTrackingLimited = false
@@ -131,10 +139,8 @@ final class FindModel {
         target = nil
         candidates = []
         samCalls = 0
-        guidance = StepGuide()
-        pickup = PickupDetector()
-        grabbingSince = nil
-        nudgedToTap = false
+        guide = nil
+        guidePhase = "-"
         processor.target = nil
         sessionStart = Date()
         phase = .locating
@@ -167,6 +173,7 @@ final class FindModel {
         var world: SIMD3<Float>
         /// SAM box on the uploaded image (pixels), for the verification crop.
         var box: CGRect
+        var recorded: RecordedCandidate
     }
 
     /// Below this SAM confidence, Spark checks the crop before we trust it (the first device test
@@ -190,6 +197,10 @@ final class FindModel {
         do {
             let response = try await MetaAPI.segment(noun: noun, jpeg: s.jpeg, imageLabel: "find_\(sessionID)_\(samCalls)")
             let list = Self.candidates(from: response.text, snapshot: s)
+            for c in list where c.recorded.reprojectsInsideMask == false {
+                log("target_outside_mask", "id \(c.info.id)")
+            }
+            record(kind: "sam", snapshot: s, samText: response.text, candidates: list.map(\.recorded), hand: nil)
             return list.isEmpty ? .failure(FindError("no_object")) : .success(list)
         } catch {
             return .failure(FindError("api_error"))
@@ -202,17 +213,21 @@ final class FindModel {
         // SAM returns every instance, unsorted.
         let records = SAMParser.parse(text).filter { ($0.confidence ?? 1) >= 0.3 }
             .sorted { ($0.confidence ?? 0) > ($1.confidence ?? 0) }.prefix(4)
-        return records.compactMap { r in
-            guard let raster = try? r.decodeMask(),
-                  case .success(let hit) = MaskTarget.locate(mask: SourceMask(record: r, raster: raster),
-                                                             depth: s.depth, intrinsics: s.intrinsics) else { return nil }
+        return records.enumerated().compactMap { index, r in
+            guard let raster = try? r.decodeMask() else { return nil }
+            let mask = SourceMask(record: r, raster: raster)
+            guard case .success(let hit) = MaskTarget.locate(mask: mask, depth: s.depth, intrinsics: s.intrinsics) else { return nil }
+            let check = MaskTarget.reprojectsInside(cameraPoint: hit.cameraPoint, mask: mask, intrinsics: s.intrinsics)
             let world = DepthProjector.world(fromCamera: hit.cameraPoint, cameraTransform: t)
             let info = AgentCandidate(id: r.id, confidence: r.confidence ?? 0,
                                       offset: BodyOffset(from: camera, to: world, cameraTransform: t),
                                       widthFraction: Float(r.right - r.left) / Float(r.sourceWidth),
                                       heightFraction: Float(r.bottom - r.top) / Float(r.sourceHeight))
-            return Candidate(info: info, world: world,
-                             box: CGRect(x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top))
+            let box = CGRect(x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top)
+            let recorded = RecordedCandidate(id: r.id, confidence: r.confidence ?? 0, world: world, cameraPoint: hit.cameraPoint,
+                                             samples: hit.samples, depthSpread: hit.depthSpread, box: box, mask: mask,
+                                             reprojected: check?.pixel, reprojectsInsideMask: check?.inside, chosen: index == 0)
+            return Candidate(info: info, world: world, box: box, recorded: recorded)
         }
     }
 
@@ -269,8 +284,20 @@ final class FindModel {
         processor.target = c.world
         phase = .guiding
         log("target", "id \(c.info.id) c \(c.info.confidence)")
-        let whereIs = GuidanceController.describe(target: c.world, cameraTransform: lastCamera, name: targetName ?? "object")
-        speaker.say([intro, whereIs, "Reach out slowly."].compactMap { $0 }.joined(separator: " "), interrupt: true)
+        let session = GuidanceSession(targetName: targetName ?? "object", target: c.world,
+                                      cameraTransform: lastCamera, time: lastFrameTime)
+        guide = session
+        guidePhase = session.phase.rawValue
+        if let intro { say(SpokenLine(text: intro, interrupt: true)) }
+        for (i, line) in session.opening.enumerated() {
+            say(SpokenLine(text: line.text, interrupt: line.interrupt && i == 0 && intro == nil))
+        }
+    }
+
+    private func say(_ line: SpokenLine) {
+        lastCue = line.text
+        log("say", line.text + (line.interrupt ? " [interrupts]" : ""), distance: handDistance)
+        speaker.say(line.text, interrupt: line.interrupt)
     }
 
     /// Tracking recovered: re-run SAM and follow the nearest candidate if the object moved a little.
@@ -290,6 +317,7 @@ final class FindModel {
             if moved < 0.3 {
                 target = nearest.world
                 processor.target = nearest.world
+                guide?.moveTarget(to: nearest.world)
             }
         }
     }
@@ -396,10 +424,18 @@ final class FindModel {
     private func ingest(_ f: FindFrame) {
         tracking = f.tracking
         lastCamera = f.cameraTransform
-        tip = f.tip
-        handSource = f.tip == nil ? "-" : f.handSource
+        lastFrameTime = f.time
+        palm = f.hand?.reference
+        fingertips = f.hand.map { Array($0.tips.values) } ?? []
+        handStatus = f.hand.map { "\($0.keypointCount)/6" } ?? (f.handFail ?? "-")
         if f.tracking != "normal" { wasTrackingLimited = true }
-        guard phase == .guiding || phase == .grabbing, let target else {
+        if let capture = f.capture {
+            record(kind: capture.kind, snapshot: capture.snapshot, samText: nil, candidates: [],
+                   hand: RecordedHand(vision: f.handVision, world: f.hand?.joints ?? [:], depths: f.handDepths),
+                   extra: ["hand_to_target_cm": handDistance.map { $0 * 100 } ?? -1,
+                           "target_world": target.map { [$0.x, $0.y, $0.z] } ?? []])
+        }
+        guard phase == .guiding || phase == .grabbing, var session = guide else {
             handDistance = nil
             return
         }
@@ -408,44 +444,53 @@ final class FindModel {
             wasTrackingLimited = false
             relock()
         }
-        let offset = f.tip.map { BodyOffset(from: $0, to: target, cameraTransform: f.cameraTransform) }
-        handDistance = offset?.length
-
-        if pickup.update(time: f.time, depthDelta: f.targetDepthDelta, handDistance: offset?.length) {
-            finish(spoken: "Got it. Well done.", event: "pickup")
-            return
+        let out = session.update(time: f.time, hand: f.hand, cameraTransform: f.cameraTransform,
+                                 targetDepthDelta: f.targetDepthDelta, speaking: speaker.isSpeaking)
+        guide = session
+        guidePhase = out.phase.rawValue
+        handDistance = out.handDistance
+        tones.update(distance: out.toneDistance)
+        for line in out.lines {
+            say(line)
+            // Snapshot the hand at the moments that tell us most about the hand-point bias.
+            if line.text == "I see your hand." { processor.requestCapture("hand_seen") }
+            if line.text.hasPrefix("Stop. It's at your hand") { processor.requestCapture("grab") }
         }
-        if phase == .grabbing {
-            tones.update(distance: nil)
-            let since = grabbingSince ?? f.time
-            grabbingSince = since
-            if !nudgedToTap && f.time - since > 8 {
-                nudgedToTap = true
-                speaker.say("Tap the screen when you have it.")
-                log("nudge_tap", "")
-            }
-            return
-        }
-        tones.update(distance: offset?.length)
-        guard let cue = guidance.update(time: f.time, offset: offset) else { return }
-        // "Stop." and "Grab it" cut in; instructions wait for silence.
-        let urgent = cue.kind == .stop || cue.kind == .grab
-        guard urgent || !speaker.isSpeaking else { return }
-        lastCue = cue.phrase
-        log("cue", cue.phrase, distance: offset?.length)
-        speaker.say(cue.phrase, interrupt: urgent)
-        if cue.kind == .grab {
+        switch out.phase {
+        case .grabbing:
             phase = .grabbing
-            grabbingSince = f.time
-            tones.update(distance: nil)
+        case .done:
+            finish(spoken: nil, event: "pickup")
+        case .gaveUp:
+            finish(spoken: "Stopping. Tap to start again.", event: "gave_up")
+        case .waitingForHand, .guiding:
+            break
         }
     }
 
-    private func finish(spoken: String, event: String) {
+    private func record(kind: String, snapshot: FrameSnapshot, samText: String?, candidates: [RecordedCandidate],
+                        hand: RecordedHand?, extra: [String: Any] = [:]) {
+        let write: (UIImage?) -> Void = { [weak self] screen in
+            guard let self else { return }
+            let prefix = recorder.record(kind: kind, snapshot: snapshot, noun: targetName, samText: samText,
+                                         candidates: candidates, hand: hand, screen: screen, extra: extra)
+            recordings += 1
+            log("recorded", prefix)
+        }
+        if let arView { arView.snapshot(saveToHDR: false) { write($0) } } else { write(nil) }
+    }
+
+    /// Log CSV and the diagnostics folder of this launch, for the Export button.
+    var exportURLs: [URL] {
+        [logURL, FileManager.default.fileExists(atPath: recorder.folder.path) ? recorder.folder : nil].compactMap { $0 }
+    }
+
+    /// `spoken` nil: the line was already said (GuidanceSession's "Got it").
+    private func finish(spoken: String?, event: String) {
         tones.stop()
         processor.target = nil
-        speaker.say(spoken, interrupt: true)
-        log(event, spoken, distance: handDistance)
+        if let spoken { speaker.say(spoken, interrupt: true) }
+        log(event, spoken ?? "", distance: handDistance)
         phase = ["pickup", "done_tap"].contains(event) ? .done : .idle
     }
 
@@ -475,24 +520,25 @@ nonisolated struct FindFrame: Sendable {
     var time: Double
     var tracking: String
     var cameraTransform: simd_float4x4
-    var tip: SIMD3<Float>?
-    var handSource: String
+    /// Six-point hand in world space; nil when not usable this frame (see `handFail`).
+    var hand: HandKeypoints?
+    var handVision: [HandJoint: SIMD2<Float>]
+    var handDepths: [HandJoint: Float]
+    var handFail: String?
+    /// Set on the frame after `requestCapture`: the photo of this exact frame, for the recorder.
+    var capture: (kind: String, snapshot: FrameSnapshot)?
     /// LiDAR depth at the target's pixel minus the target's own depth; > 0 = something farther
     /// is visible there now (object lifted away). nil when the target is off-screen or unreadable.
     var targetDepthDelta: Float?
 }
 
-/// Runs the fingertip pipeline on every second frame (≤ 30 Hz) off the main thread; drops frames
+/// Runs the six-point hand pipeline on every second frame (≤ 30 Hz) off the main thread; drops frames
 /// while busy (FrameGate) so ARKit never waits on us.
 nonisolated final class FindFrameProcessor: NSObject, ARSessionDelegate, @unchecked Sendable {
     private let gate = FrameGate(label: "sightline.find.frames")
     var queue: DispatchQueue { gate.delegateQueue }
     var onFrame: (@Sendable (FindFrame) -> Void)?
-    private let locator: FingertipLocator = {
-        var l = FingertipLocator()
-        l.allowCentreFallback = true  // the index tip hides behind the palm while grasping
-        return l
-    }()
+    private let locator = HandKeypointLocator()
     private var frameCount = 0
 
     // Written from the main actor, read on `queue`.
@@ -502,14 +548,24 @@ nonisolated final class FindFrameProcessor: NSObject, ARSessionDelegate, @unchec
         get { lock.withLock { _target } }
         set { lock.withLock { _target = newValue } }
     }
+    private var _capture: String?
+
+    /// The next processed frame also carries its photo (FrameSnapshot) under this kind.
+    func requestCapture(_ kind: String) { lock.withLock { _capture = kind } }
+    private func takeCapture() -> String? { lock.withLock { defer { _capture = nil }; return _capture } }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         frameCount += 1
         guard frameCount % 2 == 0 else { return }
         gate.submit(frame) { [self] frame in
             let r = locator.locate(in: frame)
-            onFrame?(FindFrame(time: frame.timestamp, tracking: FrameProcessor.describe(frame.camera.trackingState),
-                               cameraTransform: frame.camera.transform, tip: r.tip, handSource: r.source,
+            let tracking = FrameProcessor.describe(frame.camera.trackingState)
+            let capture = takeCapture().flatMap { kind in
+                (try? FrameSnapshot.make(from: frame, tracking: tracking)).map { (kind: kind, snapshot: $0) }
+            }
+            onFrame?(FindFrame(time: frame.timestamp, tracking: tracking, cameraTransform: frame.camera.transform,
+                               hand: r.keypoints, handVision: r.vision, handDepths: r.depths, handFail: r.failReason,
+                               capture: capture,
                                targetDepthDelta: target.flatMap { depthDelta(at: $0, frame: frame) }))
         }
     }

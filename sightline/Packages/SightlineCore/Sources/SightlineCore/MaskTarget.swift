@@ -60,6 +60,23 @@ public enum MaskTarget {
         SIMD2(1 - r.y, r.x)
     }
 
+    /// Raw `capturedImage` pixel -> pixel on the uploaded portrait image (`imageSize`, origin top-left).
+    /// Used to draw a 3D point back onto the photo SAM saw (recording / reprojection check).
+    public static func portraitPixel(fromRawPixel q: SIMD2<Float>, rawSize: SIMD2<Float>,
+                                     imageSize: SIMD2<Float>) -> SIMD2<Float> {
+        portraitNormalized(fromRawNormalized: q / rawSize) * imageSize
+    }
+
+    /// Does the target point, projected back onto the uploaded image, land inside the mask?
+    /// A no means the mask -> 3D step put the target somewhere other than on the object.
+    public static func reprojectsInside(cameraPoint: SIMD3<Float>, mask: SourceMask,
+                                        intrinsics: CameraIntrinsics) -> (pixel: SIMD2<Float>, inside: Bool)? {
+        guard let raw = DepthProjector.project(cameraPoint: cameraPoint, intrinsics: intrinsics) else { return nil }
+        let size = SIMD2(Float(mask.record.sourceWidth), Float(mask.record.sourceHeight))
+        let p = portraitPixel(fromRawPixel: raw, rawSize: intrinsics.imageSize, imageSize: size)
+        return (p, mask.contains(Int(p.x), Int(p.y)))
+    }
+
     /// - Parameters:
     ///   - erosion: a depth pixel counts only if source pixels this far away (in 4 directions) are also
     ///     in the mask; keeps samples off the object edge where depth mixes with the background.

@@ -28,6 +28,17 @@ import Testing
         return (DepthImage(width: 40, height: 30, depth: d, confidence: c), mask, k)
     }
 
+    @Test func targetReprojectsInsideItsMask() throws {
+        let (depth, mask, k) = scene()
+        let r = try MaskTarget.locate(mask: mask, depth: depth, intrinsics: k, erosion: 1).get()
+        let check = try #require(MaskTarget.reprojectsInside(cameraPoint: r.cameraPoint, mask: mask, intrinsics: k))
+        #expect(check.inside)
+        #expect(abs(check.pixel.x - 20) < 1 && abs(check.pixel.y - 15) < 1)
+        // A point 20 cm to the camera's right lands outside.
+        let off = try #require(MaskTarget.reprojectsInside(cameraPoint: r.cameraPoint + SIMD3(0.2, 0, 0), mask: mask, intrinsics: k))
+        #expect(!off.inside)
+    }
+
     @Test func locatesObjectCentreAtObjectDepth() throws {
         let (depth, mask, k) = scene()
         let r = try MaskTarget.locate(mask: mask, depth: depth, intrinsics: k, erosion: 1).get()

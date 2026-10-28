@@ -3,6 +3,7 @@
 
 import CoreVideo
 import ImageIO
+import SightlineCore
 import Vision
 
 /// Vision result in normalized coordinates (origin bottom-left) of the oriented image.
@@ -28,6 +29,30 @@ nonisolated final class HandPoseDetector {
     /// nil when no hand is found or Vision fails.
     func indexTip(in pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation) -> HandTip? {
         hand(in: pixelBuffer, orientation: orientation)?.indexTip
+    }
+
+    /// Vision joint name -> SightlineCore joint (the six-keypoint model needs palm + tips).
+    static let jointMap: [VNHumanHandPoseObservation.JointName: HandJoint] = [
+        .wrist: .wrist,
+        .thumbCMC: .thumbCMC, .thumbMP: .thumbMP, .thumbIP: .thumbIP, .thumbTip: .thumbTip,
+        .indexMCP: .indexMCP, .indexPIP: .indexPIP, .indexDIP: .indexDIP, .indexTip: .indexTip,
+        .middleMCP: .middleMCP, .middlePIP: .middlePIP, .middleDIP: .middleDIP, .middleTip: .middleTip,
+        .ringMCP: .ringMCP, .ringPIP: .ringPIP, .ringDIP: .ringDIP, .ringTip: .ringTip,
+        .littleMCP: .littleMCP, .littlePIP: .littlePIP, .littleDIP: .littleDIP, .littleTip: .littleTip,
+    ]
+
+    /// All joints Vision reports with confidence ≥ `minConfidence`; empty when no hand.
+    func joints(in pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation,
+                minConfidence: Float = 0.3) -> [HandJoint: HandTip] {
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
+        guard (try? handler.perform([request])) != nil, let hand = request.results?.first,
+              let points = try? hand.recognizedPoints(.all) else { return [:] }
+        var out: [HandJoint: HandTip] = [:]
+        for (name, p) in points where Float(p.confidence) >= minConfidence {
+            guard let j = Self.jointMap[name] else { continue }
+            out[j] = HandTip(point: SIMD2(Float(p.location.x), Float(p.location.y)), confidence: Float(p.confidence))
+        }
+        return out
     }
 
     /// nil when no hand is found or Vision fails.

@@ -16,6 +16,11 @@ public struct SpokenLine: Sendable, Equatable {
     public var text: String
     /// Cut off whatever is being said ("Stop.", "Grab it").
     public var interrupt: Bool
+
+    public init(text: String, interrupt: Bool) {
+        self.text = text
+        self.interrupt = interrupt
+    }
 }
 
 public struct GuidanceOutput: Sendable {

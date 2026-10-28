@@ -68,6 +68,9 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `Sightline/Sightline/Secrets.plist` (not in git) | sensitive | API key for the app; written by `tools/ios_secrets.sh` |
 | `Sightline/Sightline/AR/` | production, needs-review, important | ARKit frame pipeline |
 | `Sightline/Sightline/Hand/` | production, needs-review | Vision hand pose |
+| `Sightline/Sightline/AR/HandKeypointLocator.swift` | production, needs-review, important | Six-point hand in world space (Vision joints + LiDAR) for Find |
+| `Sightline/Sightline/Find/DiagnosticRecorder.swift` | testing, needs-review, important | Recording mode: photo, SAM, overlay, screen, depth per event into `Documents/diagnostics/<launch>/` |
+| `logs/device/` (not in git) | generated, sensitive | Exported device logs and recordings (photos of Nils's room) |
 | `Sightline/Sightline/Spike/` | production, needs-review | G1, G2 and G3 test screens and models (remove from the release build later) |
 | `Sightline/Sightline/g1_marker.png` | testing, generated | G1 reference image bundled in the app |
 | `spike/model_api_spike.py` | spike, needs-review, sensitive | Muse Spark + SAM 3.1 round trip; reads the API key |

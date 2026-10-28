@@ -304,7 +304,8 @@ func run(_ sc: Scenario, seed: UInt64, maxTime: Double = 60) -> RunResult {
         var hand: HandKeypoints?
         if !rng.chance(sc.handDropout) {
             var seen: [HandJoint: SIMD3<Float>] = [:]
-            for (j, p) in handJoints(palm: user.palm) where cam.sees(p) {
+            // Sorted so the random draws come in the same order every launch (Dictionary order is random).
+            for (j, p) in handJoints(palm: user.palm).sorted(by: { $0.key.rawValue < $1.key.rawValue }) where cam.sees(p) {
                 if let hide = sc.tipHidden[j], rng.chance(hide) { continue }
                 let noisy = p + SIMD3(rng.gauss(sc.jointNoise), rng.gauss(sc.jointNoise), rng.gauss(sc.jointNoise))
                 seen[j] = cam.perceived(noisy, biasPerMetre: sc.biasPerMetre)
