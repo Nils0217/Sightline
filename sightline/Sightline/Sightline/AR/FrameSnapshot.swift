@@ -1,7 +1,8 @@
 // labels: production, needs-review
 // Everything a cloud call needs from one ARFrame, copied out so the frame can be released
 // right away (holding ARFrames starves ARKit's buffer pool): upright 512 px JPEG + depth +
-// camera pose and intrinsics at that instant.
+// camera pose and intrinsics at that instant. `longEdge` 930 (2026-10-29) is for small objects:
+// FindModel cuts it into 2x2 tiles of ~512 px (SmallObjects.tiles), one SAM call each.
 
 import ARKit
 import CoreImage
@@ -25,7 +26,9 @@ nonisolated struct FrameSnapshot: Sendable {
         case encodeFailed = "encode_failed"
     }
 
-    static func make(from frame: ARFrame, tracking: String) throws(Failure) -> FrameSnapshot {
+    static let tiledLongEdge: CGFloat = 930
+
+    static func make(from frame: ARFrame, tracking: String, longEdge: CGFloat = longEdge) throws(Failure) -> FrameSnapshot {
         guard let depthData = frame.sceneDepth, let depth = DepthImageReader.read(depthData) else { throw .noDepth }
         // Portrait upright = raw rotated 90° CW (`.right`), same as the Vision/G1 pipeline.
         var image = CIImage(cvPixelBuffer: frame.capturedImage).oriented(.right)

@@ -28,6 +28,14 @@ Muse Code works on a branch per task (`muse/<task>`); Claude reviews before merg
 - **SAM is event-triggered, not 1 Hz:** call it on target lock, when tracking confidence drops, and once before "now grab". Target ≤ 5 calls per guidance session.
 - **Downscale images to ~512 px** on the long edge before any upload.
 - **Muse Spark effort by job** (Nils, 2026-10-28, from G4): `minimal` for fast-path calls (naming objects, short yes/no checks, spoken replies); `medium` for real reasoning (choosing between several SAM instances, planning). Keep `max_output_tokens` generous — reasoning tokens count toward it. Spark is never on the critical path to the first spoken guidance.
+- **Exceptions approved 2026-10-29 (Nils: "全做"), all event-triggered:**
+  - Keep-scanning when the object is not in view: ≤ 8 SAM calls per search.
+  - Small objects (keys, rings …): 4 SAM calls per view (2×2 tiles of a 930 px photo, each tile ~512 px).
+  - Strict hold check: 1 extra SAM call, only when the hand has moved away from the object.
+  - Room scan ("scan the room"): ≤ 12 Spark calls at medium effort, once per room.
+  - Scan give-up: 1 Spark guess at minimal effort.
+
+  Worst case, a small object with a full scan is about 37 SAM calls, roughly $0.09.
 - Log latency and estimated cost of every API call to `logs/api_calls.csv`. Reuse fixed test images in `spike/images/`.
 - Coding agents: if Muse Code spend exceeds ~$15 in a day, move work back to Claude.
 

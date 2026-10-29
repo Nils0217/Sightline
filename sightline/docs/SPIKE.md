@@ -134,5 +134,19 @@ Findings:
 - [ ] Device run v2 (Nils)
 - [x] Muse Spark as commander (tool calling: `get_state`, `find_object`, `select_target`, `say`, `ask_user`, `stop`): unparsed commands (minimal) and several close SAM matches (medium). Targets the Best Agentic Use-Case prize.
 - [x] Verify the tool-calling shape live (2026-10-28): works; switched to resending history (previous_response_id turns were 9–30 s), state in the first message, `select_target` carries the spoken sentence. See docs/api-notes.md.
+- [x] v3 (`d9051a4`, `ebc3e94`) and v4 (`6d5e355`, `9d77d1e`) device runs on 2026-10-28: findings and fixes in `docs/TEST_LOG.md` T3–T5.
+- [x] v5 fixes (2026-10-29, `docs/TEST_LOG.md` T5):
+  - speech watchdog and audio session keeper;
+  - SAM empty output logged as `sam_empty`, not `api_error`;
+  - small objects tiled 2×2 plus adaptive mask locate;
+  - strict hold check (reference photo, plus "still there?");
+  - agent scans instead of looping `find_object`;
+  - scan direction prompts and a Spark guess on give-up;
+  - room map ("scan the room", ARWorldMap + inventory, hints);
+  - blind controls (tap feedback, double tap = status, long press = reset, haptics, earcons, VoiceOver actions);
+  - "turn to face it" for objects at the edge of the view.
+
+  Simulator 12/12 scenarios at 20/20; 97 unit tests.
+- [ ] Device run v5 (Nils): `docs/FIND_TEST.md`, then add T6 to `docs/TEST_LOG.md`
 - [ ] Pre-grab SAM confirm (PRD step 6) — deferred: the reaching hand occludes the object; decide after v1 test.
 - [ ] Action Button / App Intents trigger

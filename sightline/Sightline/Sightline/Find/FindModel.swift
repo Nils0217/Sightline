@@ -10,6 +10,11 @@
 // parser cannot read (effort minimal) and several plausible SAM matches (effort medium).
 // Cloud is called only on events (lock, re-lock after tracking recovers); ≤ 5 SAM calls per
 // find session. The guidance loop never waits on the network.
+// 2026-10-29 (after the 9d77d1e device test, docs/TEST_LOG.md): speech watchdog + audio session
+// keeper, SAM empty output = "nothing found" (not an error), small objects tiled 2x2, strict hold
+// check (reference photo + "is it still on the table"), scan says which way to turn and asks Spark
+// for a guess when it gives up, room map ("scan the room"), and blind controls: every tap answers
+// at once, double tap = status, long press = reset, haptics and earcons.
 
 import ARKit
 import AVFoundation
@@ -22,7 +27,7 @@ import UIKit
 @Observable
 final class FindModel {
     enum Phase: String {
-        case idle, listening, locating, searching, guiding, grabbing, verifying, done
+        case idle, listening, locating, searching, guiding, grabbing, verifying, done, mapping
     }
 
     static let maxSAMCalls = 5
@@ -49,6 +54,17 @@ final class FindModel {
     @ObservationIgnored private let speaker = Speaker()
     @ObservationIgnored private let tones = TonePlayer()
     @ObservationIgnored private let input = SpeechInput()
+    @ObservationIgnored private let audio = AudioSessionKeeper()
+    @ObservationIgnored private let room = RoomMapStore()
+    /// Waiting for ARKit to relocalize against the saved room map (since this date).
+    @ObservationIgnored private var relocalizingSince: Date?
+    /// The target as seen at lock (crop of the SAM box), for the strict hold check.
+    @ObservationIgnored private var referenceCrop: Data?
+    /// Room scan in progress ("scan the room").
+    @ObservationIgnored private var mapPlanner: ScanPlanner?
+    @ObservationIgnored private var mapInventory = RoomInventory(created: Date())
+    @ObservationIgnored private var mapInFlight = 0
+    @ObservationIgnored private var mapViews = 0
     @ObservationIgnored private var guide: GuidanceSession?
     @ObservationIgnored private var doneAt: Date?
     /// Keep-scanning state while the object is not in view (ScanPlanner decides when to call SAM).
@@ -79,20 +95,28 @@ final class FindModel {
         }
         session.delegate = processor
         session.delegateQueue = processor.queue
+        speaker.onEvent = { [weak self] event, text in self?.log(event, text) }
+        audio.onEvent = { [weak self] event, detail in self?.log(event, detail) }
+        audio.onReset = { [weak self] in self?.speaker.rebuild(reason: "audio reset") }
+    }
+
+    private static func trackingConfig() -> ARWorldTrackingConfiguration {
+        let config = ARWorldTrackingConfiguration()
+        config.frameSemantics = [.sceneDepth]
+        return config
     }
 
     func start() {
-        let config = ARWorldTrackingConfiguration()
-        config.frameSemantics = [.sceneDepth]
+        let config = Self.trackingConfig()
+        if let map = room.load() {
+            // Saved room map: relocalize against it; ingest() falls back after RoomMapStore.relocalizeTimeout.
+            config.initialWorldMap = map
+            relocalizingSince = Date()
+            log("room_map_load", "\(room.inventory?.items.count ?? 0) items")
+        }
         session.run(config)
+        audio.start()
         Task {
-            // Off the main thread: setActive can block the UI.
-            await Task.detached {
-                let audio = AVAudioSession.sharedInstance()
-                try? audio.setCategory(.playAndRecord, mode: .default,
-                                       options: [.defaultToSpeaker, .duckOthers, .allowBluetoothA2DP])
-                try? audio.setActive(true)
-            }.value
             if await SpeechInput.requestAuthorization() {
                 speaker.say("Sightline ready. Tap the screen and say what to find.")
             } else {
@@ -113,7 +137,10 @@ final class FindModel {
     static let verifyAfterDone: TimeInterval = 15
 
     /// The one big button: listen when idle, check the object when the hand is at it, stop otherwise.
+    /// Every tap is answered at once (haptic, then a sound or words), 2026-10-29 blindfold test.
     func tap() {
+        Haptics.tap()
+        log("tap", phase.rawValue)
         switch phase {
         case .idle:
             listen()
@@ -128,9 +155,62 @@ final class FindModel {
         case .guiding where (handDistance ?? .infinity) <= Self.verifyTapRadius:
             startHoldCheck()
         case .guiding, .locating, .searching:
-            finish(spoken: "Stopped.", event: "stop")
-        case .listening, .verifying:
-            break
+            finish(spoken: "Stopped. Tap to speak a command.", event: "stop")
+        case .mapping:
+            finishMapping(early: true)
+        case .verifying:
+            speaker.say("Still checking.")
+        case .listening:
+            break  // speaking now would be heard by the recogniser; the haptic is the answer
+        }
+    }
+
+    /// Double tap: say where we are and what to do next.
+    func speakStatus() {
+        Haptics.tap()
+        let line = statusLine()
+        log("status", line)
+        speaker.say(line, interrupt: true)
+    }
+
+    /// Long press: cancel everything and go back to idle.
+    func reset() {
+        Haptics.reset()
+        sessionID += 1  // every pending task sees a new session and drops its result
+        tones.stop()
+        tones.earcon(.reset)
+        processor.target = nil
+        guide = nil
+        scan = nil
+        mapPlanner = nil
+        candidates = []
+        phase = .idle
+        log("reset", "")
+        speaker.say("Reset. Tap to speak a command.", interrupt: true)
+    }
+
+    func statusLine() -> String {
+        let name = targetName ?? "object"
+        switch phase {
+        case .idle:
+            return "Ready. Tap and say what to find." + (room.active ? " Room map is on." : "")
+        case .listening:
+            return "Listening."
+        case .locating:
+            return "Looking for the \(name)."
+        case .searching:
+            return "Searching for the \(name). \(scanCalls) views checked. Turn slowly. Tap to stop."
+        case .guiding:
+            guard let d = handDistance else { return "Guiding you to the \(name). I can't see your hand. Reach toward it. Tap to stop." }
+            return "Guiding you to the \(name). Your hand is about \(max(1, Int((d * 10).rounded())) * 10) centimetres away."
+        case .grabbing:
+            return "Your hand is at the \(name). Grab it and lift it. Tap if you think you have it."
+        case .verifying:
+            return "Checking what you are holding."
+        case .done:
+            return "Done. You have the \(name). Tap to find something else."
+        case .mapping:
+            return "Scanning the room. \(mapViews) views, \(mapInventory.items.count) things so far. Turn slowly. Tap to finish."
         }
     }
 
@@ -160,11 +240,22 @@ final class FindModel {
         guard let noun = targetName else { return }
         let id = sessionID
         let crop = Self.handRegion(handVision, snapshot: s).flatMap { Self.crop(s.jpeg, to: $0, margin: 0.8) } ?? s.jpeg
+        let reference = referenceCrop
+        // The hand has moved away from where the object was: if SAM still sees it there, it was not taken.
+        let handAway = checkFromSession || (handDistance ?? 0) > 0.12
+        let original = target
         Task {
-            let answer = try? await MuseAgent.verifyHolding(noun: noun, jpeg: crop, label: "hold_\(id)")
+            async let spark = MuseAgent.verifyHolding(noun: noun, jpeg: crop, reference: reference, label: "hold_\(id)")
+            async let there = handAway ? stillThere(noun, at: original, snapshot: s) : nil
+            var result = (try? await spark).flatMap { $0 }
+            let stillThere = await there
             guard id == sessionID, phase == .verifying else { return }
-            let result = answer.flatMap { $0 }
-            log("hold_check_result", result.map { $0 ? "yes" : "no" } ?? "unclear")
+            log("hold_check_result", (result.map { $0 ? "yes" : "no" } ?? "unclear")
+                + (reference == nil ? "" : " (with reference)") + " still_there \(stillThere.map { "\($0)" } ?? "not checked")")
+            if stillThere == true && result != false {
+                result = false
+                log("hold_check_override", "object still where it was found")
+            }
             if checkFromSession, var session = guide {
                 checkFromSession = false
                 let lines = session.resolveCheck(result, time: lastFrameTime)
@@ -182,6 +273,8 @@ final class FindModel {
                 finish(spoken: "Yes, that's the \(noun). Well done.", event: "hold_yes")
             case false?:
                 // Back to guiding from the hand prompt; the target stays where SAM put it.
+                Haptics.warning()
+                tones.earcon(.failure)
                 say(SpokenLine(text: "That doesn't look like the \(noun). Put it down, and I'll guide you again.", interrupt: true))
                 guide = target.map { GuidanceSession(targetName: noun, target: $0, cameraTransform: lastCamera, time: lastFrameTime) }
                 processor.target = target
@@ -191,6 +284,19 @@ final class FindModel {
                 phase = resumePhase
             }
         }
+    }
+
+    /// One SAM call on the hold-check photo: is the object still where it was locked (within 5 cm)?
+    /// nil = could not tell (target off-screen, no answer).
+    private func stillThere(_ noun: String, at original: SIMD3<Float>?, snapshot s: FrameSnapshot) async -> Bool? {
+        guard let original else { return nil }
+        let c = DepthProjector.camera(fromWorld: original, cameraTransform: s.cameraTransform)
+        let k = s.intrinsics  // raw camera image
+        guard let p = DepthProjector.project(cameraPoint: c, intrinsics: k),
+              p.x > 0, p.y > 0, p.x < k.imageSize.x, p.y < k.imageSize.y else { return nil }
+        guard let response = try? await MetaAPI.segment(noun: noun, jpeg: s.jpeg, imageLabel: "still_\(sessionID)") else { return nil }
+        let list = Self.candidates(from: SAMParser.parse(response.text), snapshot: s)
+        return list.contains { simd_distance($0.world, original) < 0.05 }
     }
 
     /// Bounding box of the Vision hand joints on the uploaded image, nil without joints.
@@ -206,15 +312,23 @@ final class FindModel {
     private func listen() {
         speaker.stop()
         tones.stop()
+        tones.earcon(.listening)
         phase = .listening
+        let id = sessionID
         Task {
+            try? await Task.sleep(for: .milliseconds(180))  // let the earcon end before the mic opens
             let heard = (try? await input.listenOnce()) ?? ""
+            // The input engine may have changed the route: back to the loudspeaker before speaking.
+            audio.apply()
+            guard id == sessionID else { return }  // long-press reset while listening
             lastHeard = heard
             switch CommandParser.parse(heard) {
             case .find(let noun):
                 startFind(noun)
+            case .mapRoom:
+                startMapping()
             case .stop:
-                finish(spoken: "Stopped.", event: "stop")
+                finish(spoken: "Stopped. Tap to speak a command.", event: "stop")
             case nil where heard.isEmpty:
                 phase = .idle
                 speaker.say("I didn't hear anything. Tap and try again.")
@@ -234,6 +348,8 @@ final class FindModel {
         scan = nil
         scanInFlight = false
         checkFromSession = false
+        referenceCrop = nil
+        mapPlanner = nil
         guide = nil
         guidePhase = "-"
         // A limited-tracking moment before this search must not trigger a re-lock (2026-10-28 log:
@@ -281,28 +397,60 @@ final class FindModel {
     /// locked a power bank for "phone" in a room with no phone).
     static let verifyBelow: Float = 0.75
 
-    /// One SAM call on the current frame -> up to 4 candidates in 3D, most confident first.
-    /// `scanning`: counted against the scan budget (ScanPlanner) instead of `maxSAMCalls`.
-    private func segment(_ noun: String, scanning: Bool = false) async -> Result<[Candidate], FindError> {
-        guard scanning || samCalls < Self.maxSAMCalls else { return .failure(FindError("budget")) }
-        var snapshot: FrameSnapshot?
+    /// The current frame as a snapshot (retries while depth is missing).
+    private func snapshot(longEdge: CGFloat = FrameSnapshot.longEdge) async -> FrameSnapshot? {
         for _ in 0..<10 {
-            if let frame = session.currentFrame, let s = try? FrameSnapshot.make(from: frame, tracking: tracking) {
-                snapshot = s
-                break
-            }
+            if let frame = session.currentFrame,
+               let s = try? FrameSnapshot.make(from: frame, tracking: tracking, longEdge: longEdge) { return s }
             try? await Task.sleep(for: .milliseconds(200))
         }
-        guard let s = snapshot else { return .failure(FindError("no_frame")) }
+        return nil
+    }
+
+    /// One SAM event on the current frame -> up to 4 candidates in 3D, most confident first.
+    /// `scanning`: counted against the scan budget (ScanPlanner) instead of `maxSAMCalls`.
+    /// Small objects (SmallObjects, e.g. keys): a 930 px photo cut into 2x2 tiles of ~512 px, one SAM
+    /// call per tile in parallel (2026-10-29: the keys were 13x17 px at 512 px and SAM missed them).
+    private func segment(_ noun: String, scanning: Bool = false) async -> Result<[Candidate], FindError> {
+        guard scanning || samCalls < Self.maxSAMCalls else { return .failure(FindError("budget")) }
+        let tiled = SmallObjects.isSmall(noun)
+        guard let s = await snapshot(longEdge: tiled ? FrameSnapshot.tiledLongEdge : FrameSnapshot.longEdge) else {
+            return .failure(FindError("no_frame"))
+        }
         if scanning { scanCalls += 1 } else { samCalls += 1 }
         lastJPEG = s.jpeg
         do {
-            let response = try await MetaAPI.segment(noun: noun, jpeg: s.jpeg, imageLabel: "find_\(sessionID)_\(samCalls)")
-            let list = Self.candidates(from: response.text, snapshot: s)
+            let label = "find_\(sessionID)_\(samCalls + scanCalls)"
+            var records: [SAMRecord]
+            var samText: String
+            var extra: [String: Any] = ["scanning": scanning]
+            if tiled {
+                let tiles = SmallObjects.tiles(for: s.imageSize)
+                let texts = try await withThrowingTaskGroup(of: (Int, String).self) { group in
+                    for (i, tile) in tiles.enumerated() {
+                        let rect = CGRect(x: tile.origin.x, y: tile.origin.y, width: tile.size.x, height: tile.size.y)
+                        guard let jpeg = Self.crop(s.jpeg, to: rect, margin: 0) else { continue }
+                        group.addTask { (i, try await MetaAPI.segment(noun: noun, jpeg: jpeg, imageLabel: "\(label)_tile\(i)").text) }
+                    }
+                    var out = [String](repeating: "", count: tiles.count)
+                    for try await (i, text) in group { out[i] = text }
+                    return out
+                }
+                samText = texts.joined(separator: SmallObjects.separator)
+                records = SmallObjects.parseTiled(samText, origins: tiles.map(\.origin), fullSize: s.imageSize)
+                extra["tile_origins"] = tiles.map { [$0.origin.x, $0.origin.y] }
+                extra["tile_size"] = [tiles[0].size.x, tiles[0].size.y]
+            } else {
+                samText = try await MetaAPI.segment(noun: noun, jpeg: s.jpeg, imageLabel: label).text
+                records = SAMParser.parse(samText)
+            }
+            if samText.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "#tile", with: "").isEmpty {
+                log("sam_empty", tiled ? "4 tiles, nothing found" : "nothing found")
+            }
+            let list = Self.candidates(from: records, snapshot: s)
             for c in list where c.recorded.reprojectsInsideMask == false {
                 log("target_outside_mask", "id \(c.info.id)")
             }
-            var extra: [String: Any] = ["scanning": scanning]
             if let o = list.first?.object {
                 extra["object_flat"] = o.isFlat
                 extra["object_support_y"] = o.supportHeight ?? NSNull()
@@ -310,41 +458,55 @@ final class FindModel {
                 extra["object_centre"] = [o.centre.x, o.centre.y, o.centre.z]
                 extra["obstacle_points"] = list.first?.obstacles?.points.count ?? 0
             }
-            record(kind: scanning ? "scan" : "sam", snapshot: s, samText: response.text, candidates: list.map(\.recorded),
+            record(kind: scanning ? "scan" : "sam", snapshot: s, samText: samText, candidates: list.map(\.recorded),
                    hand: nil, extra: extra)
             return list.isEmpty ? .failure(FindError("no_object")) : .success(list)
         } catch {
+            // A real failure (HTTP, network); an empty SAM answer is not an error any more.
+            log("api_error", error.localizedDescription)
             return .failure(FindError("api_error"))
         }
     }
 
-    nonisolated static func candidates(from text: String, snapshot s: FrameSnapshot) -> [Candidate] {
+    /// SAM records -> up to 4 candidates in 3D, most confident first; duplicates from overlapping
+    /// tiles (same place within 4 cm) are dropped.
+    nonisolated static func candidates(from records: [SAMRecord], snapshot s: FrameSnapshot) -> [Candidate] {
         let t = s.cameraTransform
         let camera = SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z)
         // SAM returns every instance, unsorted.
-        let records = SAMParser.parse(text).filter { ($0.confidence ?? 1) >= 0.3 }
-            .sorted { ($0.confidence ?? 0) > ($1.confidence ?? 0) }.prefix(4)
-        return records.enumerated().compactMap { index, r in
-            guard let raster = try? r.decodeMask() else { return nil }
-            let mask = SourceMask(record: r, raster: raster)
-            guard case .success(let hit) = MaskTarget.locate(mask: mask, depth: s.depth, intrinsics: s.intrinsics) else { return nil }
-            let check = MaskTarget.reprojectsInside(cameraPoint: hit.cameraPoint, mask: mask, intrinsics: s.intrinsics)
-            let world = DepthProjector.world(fromCamera: hit.cameraPoint, cameraTransform: t)
-            let info = AgentCandidate(id: r.id, confidence: r.confidence ?? 0,
-                                      offset: BodyOffset(from: camera, to: world, cameraTransform: t),
-                                      widthFraction: Float(r.right - r.left) / Float(r.sourceWidth),
-                                      heightFraction: Float(r.bottom - r.top) / Float(r.sourceHeight))
-            let box = CGRect(x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top)
-            let recorded = RecordedCandidate(id: r.id, confidence: r.confidence ?? 0, world: world, cameraPoint: hit.cameraPoint,
-                                             samples: hit.samples, depthSpread: hit.depthSpread, box: box, mask: mask,
-                                             reprojected: check?.pixel, reprojectsInsideMask: check?.inside, chosen: index == 0)
-            let object = ObjectModel.build(mask: mask, depth: s.depth, intrinsics: s.intrinsics, cameraTransform: t)
-            let obstacles = object.flatMap {
-                ObstacleMap.build(mask: mask, depth: s.depth, intrinsics: s.intrinsics, cameraTransform: t, object: $0)
-            }
-            return Candidate(info: info, world: object?.centre ?? world, box: box, recorded: recorded,
-                             object: object, obstacles: obstacles)
+        let sorted = records.filter { ($0.confidence ?? 1) >= 0.3 }.sorted { ($0.confidence ?? 0) > ($1.confidence ?? 0) }
+        var out: [Candidate] = []
+        for r in sorted where out.count < 4 {
+            guard let c = candidate(r, chosen: out.isEmpty, snapshot: s, camera: camera),
+                  !out.contains(where: { simd_distance($0.world, c.world) < 0.04 }) else { continue }
+            out.append(c)
         }
+        return out
+    }
+
+    nonisolated private static func candidate(_ r: SAMRecord, chosen: Bool, snapshot s: FrameSnapshot,
+                                              camera: SIMD3<Float>) -> Candidate? {
+        let t = s.cameraTransform
+        guard let raster = try? r.decodeMask() else { return nil }
+        let mask = SourceMask(record: r, raster: raster)
+        // Adaptive: small masks (keys, 13x17 px) lose every pixel to the default erosion.
+        guard case .success(let hit) = MaskTarget.locateAdaptive(mask: mask, depth: s.depth, intrinsics: s.intrinsics) else { return nil }
+        let check = MaskTarget.reprojectsInside(cameraPoint: hit.cameraPoint, mask: mask, intrinsics: s.intrinsics)
+        let world = DepthProjector.world(fromCamera: hit.cameraPoint, cameraTransform: t)
+        let info = AgentCandidate(id: r.id, confidence: r.confidence ?? 0,
+                                  offset: BodyOffset(from: camera, to: world, cameraTransform: t),
+                                  widthFraction: Float(r.right - r.left) / Float(r.sourceWidth),
+                                  heightFraction: Float(r.bottom - r.top) / Float(r.sourceHeight))
+        let box = CGRect(x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top)
+        let recorded = RecordedCandidate(id: r.id, confidence: r.confidence ?? 0, world: world, cameraPoint: hit.cameraPoint,
+                                         samples: hit.samples, depthSpread: hit.depthSpread, box: box, mask: mask,
+                                         reprojected: check?.pixel, reprojectsInsideMask: check?.inside, chosen: chosen)
+        let object = ObjectModel.build(mask: mask, depth: s.depth, intrinsics: s.intrinsics, cameraTransform: t)
+        let obstacles = object.flatMap {
+            ObstacleMap.build(mask: mask, depth: s.depth, intrinsics: s.intrinsics, cameraTransform: t, object: $0)
+        }
+        return Candidate(info: info, world: object?.centre ?? world, box: box, recorded: recorded,
+                         object: object, obstacles: obstacles)
     }
 
     private func lock(noun: String) async {
@@ -388,11 +550,18 @@ final class FindModel {
     private func startScan(_ noun: String) {
         var planner = ScanPlanner(time: lastFrameTime)
         planner.markSearched(cameraTransform: lastCamera)
+        var text = ScanPlanner.startLine(noun)
+        // Room map: say where it was last seen and turn the scan toward it first.
+        if let item = room.item(for: noun) {
+            planner.hint = item.world
+            text = RoomInventory.hint(item, noun: noun, cameraTransform: lastCamera) + " " + text
+            log("room_hint", "\(item.name) \(item.source) \(item.seen)")
+        }
         scan = planner
         scanInFlight = false
         phase = .searching
         log("scan_start", "")
-        say(SpokenLine(text: ScanPlanner.startLine(noun), interrupt: true))
+        say(SpokenLine(text: text, interrupt: true))
     }
 
     private func stepScan(_ f: FindFrame) {
@@ -403,11 +572,16 @@ final class FindModel {
         case .wait:
             break
         case .prompt:
-            say(SpokenLine(text: ScanPlanner.promptLine, interrupt: false))
+            say(SpokenLine(text: planner.directionPrompt(cameraTransform: f.cameraTransform), interrupt: false))
         case .giveUp:
             var text = ScanPlanner.giveUpLine(noun)
-            if let p = lastSeen[noun] { text = Self.earlierLine(p, cameraTransform: f.cameraTransform) + " " + text }
+            if let item = room.item(for: noun) {
+                text = RoomInventory.hint(item, noun: noun, cameraTransform: f.cameraTransform) + " " + text
+            } else if let p = lastSeen[noun] {
+                text = Self.earlierLine(p, cameraTransform: f.cameraTransform) + " " + text
+            }
             finish(spoken: text, event: "scan_give_up")
+            suggestAfterGiveUp(noun)
         case .scan:
             scanInFlight = true
             tones.click()
@@ -426,6 +600,21 @@ final class FindModel {
                     log("scan_nothing", error.reason)
                 }
             }
+        }
+    }
+
+    /// After giving up: one Spark (minimal) guess from a wide photo, spoken if nothing else started.
+    private func suggestAfterGiveUp(_ noun: String) {
+        let id = sessionID
+        Task {
+            guard let s = await snapshot(),
+                  let guess = try? await MuseAgent.suggest(noun: noun, jpeg: s.jpeg, label: "suggest_\(id)") else {
+                log("spark_suggest", "none")
+                return
+            }
+            log("spark_suggest", guess)
+            guard id == sessionID, phase == .idle else { return }
+            say(SpokenLine(text: "A guess: " + guess, interrupt: false))
         }
     }
 
@@ -453,8 +642,15 @@ final class FindModel {
         target = c.world
         processor.target = c.world
         phase = .guiding
+        Haptics.success()
+        tones.earcon(.success)
         log("target", "id \(c.info.id) c \(c.info.confidence)")
-        if let name = targetName { lastSeen[name] = c.world }
+        // What the object looked like here, for the strict hold check later.
+        referenceCrop = lastJPEG.flatMap { Self.crop($0, to: c.box, margin: 0.3) }
+        if let name = targetName {
+            lastSeen[name] = c.world
+            room.remember(name, at: c.world)
+        }
         log("object", c.object.map { o in
             String(format: "%@ size %.0fx%.0fx%.0f cm support %@ obstacles %d", o.isFlat ? "flat" : "solid",
                    o.size.x * 100, o.size.y * 100, o.size.z * 100,
@@ -563,8 +759,12 @@ final class FindModel {
                 candidates = list
                 return .output(agentState().json())
             case .failure(let error):
+                // 2026-10-29: Spark called find_object five times on the same view. Not in view = scan
+                // while the user turns, as for a parsed command; the agent is done.
                 candidates = []
-                return .output("{\"error\":\"\(error.reason)\"}")
+                log("agent_scan", error.reason)
+                startScan(noun)
+                return .ended
             }
         case .selectTarget(let candidateID, let sentence):
             guard let c = candidates.first(where: { $0.info.id == candidateID }) else {
@@ -605,6 +805,7 @@ final class FindModel {
         fingertips = f.hand.map { Array($0.tips.values) } ?? []
         handStatus = f.hand.map { "\($0.keypointCount)/6" } ?? (f.handFail ?? "-")
         if f.tracking != "normal" { wasTrackingLimited = true }
+        checkRelocalization(f)
         if let capture = f.capture {
             record(kind: capture.kind, snapshot: capture.snapshot, samText: nil, candidates: [],
                    hand: RecordedHand(vision: f.handVision, world: f.hand?.joints ?? [:], depths: f.handDepths),
@@ -614,6 +815,10 @@ final class FindModel {
         }
         if phase == .searching {
             stepScan(f)
+            return
+        }
+        if phase == .mapping {
+            stepMapping(f)
             return
         }
         guard phase == .guiding || phase == .grabbing, var session = guide else {
@@ -655,6 +860,116 @@ final class FindModel {
         }
     }
 
+    // MARK: Room map ("scan the room")
+
+    /// Saved map: tracking "normal" = matched. Not matched within the timeout: fresh session, no map.
+    private func checkRelocalization(_ f: FindFrame) {
+        guard let since = relocalizingSince else { return }
+        if f.tracking == "normal" {
+            relocalizingSince = nil
+            room.relocalized()
+            log("room_map_relocalized", String(format: "%.1f s", Date().timeIntervalSince(since)))
+        } else if Date().timeIntervalSince(since) > RoomMapStore.relocalizeTimeout {
+            relocalizingSince = nil
+            log("room_map_fallback", f.tracking)
+            session.run(Self.trackingConfig(), options: [.resetTracking, .removeExistingAnchors])
+        }
+    }
+
+    private func startMapping() {
+        beginSession(name: nil)
+        var planner = ScanPlanner(time: lastFrameTime)
+        planner.budget = 12
+        planner.minNewAngle = 30 * .pi / 180
+        mapPlanner = planner
+        mapInventory = RoomInventory(created: Date())
+        mapInFlight = 0
+        mapViews = 0
+        phase = .mapping
+        log("map_start", "")
+        say(SpokenLine(text: "Scanning the room. Hold the phone at chest height and turn slowly in a full circle. "
+                       + "Tap when you are done.", interrupt: true))
+    }
+
+    private func stepMapping(_ f: FindFrame) {
+        guard var planner = mapPlanner else { return }
+        let step = planner.update(time: f.time, cameraTransform: f.cameraTransform, busy: mapInFlight >= 2,
+                                  speaking: speaker.isSpeaking)
+        mapPlanner = planner
+        switch step {
+        case .wait:
+            break
+        case .prompt:
+            say(SpokenLine(text: planner.directionPrompt(cameraTransform: f.cameraTransform), interrupt: false))
+        case .giveUp:
+            if mapInFlight == 0 { finishMapping(early: false) }
+        case .scan:
+            tones.click()
+            mapInFlight += 1
+            mapViews += 1
+            let id = sessionID, view = mapViews
+            Task {
+                defer { if id == sessionID { mapInFlight -= 1 } }
+                guard let s = await snapshot(),
+                      let reply = try? await MuseAgent.listObjects(jpeg: s.jpeg, label: "room_\(id)_\(view)") else {
+                    log("map_view_fail", "\(view)")
+                    return
+                }
+                guard id == sessionID, phase == .mapping else { return }
+                var names: [String] = []
+                for o in RoomInventory.parseSparkObjects(reply) {
+                    guard let p = RoomInventory.place(portrait: o.point, depth: s.depth, intrinsics: s.intrinsics,
+                                                      cameraTransform: s.cameraTransform) else { continue }
+                    mapInventory.remember(o.name, at: p, date: Date(), source: "room_scan")
+                    names.append(o.name)
+                }
+                log("map_view", "\(view): " + names.joined(separator: " "))
+                record(kind: "room", snapshot: s, samText: reply, candidates: [], hand: nil,
+                       extra: ["room_objects": names])
+            }
+        }
+    }
+
+    /// Save the ARWorldMap and the inventory (overwrites the previous room map).
+    private func finishMapping(early: Bool) {
+        let id = sessionID
+        let inventory = mapInventory
+        mapPlanner = nil
+        phase = .idle
+        log("map_finish", "\(mapViews) views, \(inventory.items.count) items" + (early ? " (tap)" : ""))
+        guard !inventory.items.isEmpty else {
+            Haptics.warning()
+            say(SpokenLine(text: "I didn't find anything to remember. Try again with more light.", interrupt: true))
+            return
+        }
+        say(SpokenLine(text: "Saving the room.", interrupt: true))
+        session.getCurrentWorldMap { map, error in
+            nonisolated(unsafe) let map = map  // handed to the main actor once, never shared
+            let message = error?.localizedDescription
+            Task { @MainActor [weak self] in
+                guard let self, id == self.sessionID else { return }
+                guard let map else {
+                    self.log("map_save_fail", message ?? "no map")
+                    self.say(SpokenLine(text: "I couldn't save the room. Move the phone around a little more and try again.",
+                                        interrupt: true))
+                    return
+                }
+                do {
+                    try self.room.save(map: map, inventory: inventory)
+                    let names = Array(Set(inventory.items.map(\.name))).sorted().prefix(4)
+                    self.log("map_saved", "\(inventory.items.count) items, \(map.anchors.count) anchors")
+                    Haptics.success()
+                    self.tones.earcon(.success)
+                    self.say(SpokenLine(text: "Room saved. I remember \(inventory.items.count) things, including "
+                                        + names.joined(separator: ", ") + ".", interrupt: true))
+                } catch {
+                    self.log("map_save_fail", error.localizedDescription)
+                    self.say(SpokenLine(text: "I couldn't save the room.", interrupt: true))
+                }
+            }
+        }
+    }
+
     private func record(kind: String, snapshot: FrameSnapshot, samText: String?, candidates: [RecordedCandidate],
                         hand: RecordedHand?, extra: [String: Any] = [:]) {
         let write: (UIImage?) -> Void = { [weak self] screen in
@@ -669,14 +984,25 @@ final class FindModel {
 
     /// Log CSV and the diagnostics folder of this launch, for the Export button.
     var exportURLs: [URL] {
-        [logURL, FileManager.default.fileExists(atPath: recorder.folder.path) ? recorder.folder : nil,
-         FileManager.default.fileExists(atPath: ApiCallLog.url.path) ? ApiCallLog.url : nil].compactMap { $0 }
+        let fm = FileManager.default
+        return [logURL, fm.fileExists(atPath: recorder.folder.path) ? recorder.folder : nil,
+                fm.fileExists(atPath: ApiCallLog.url.path) ? ApiCallLog.url : nil,
+                fm.fileExists(atPath: RoomMapStore.folder.appendingPathComponent("inventory.json").path)
+                    ? RoomMapStore.folder.appendingPathComponent("inventory.json") : nil].compactMap { $0 }
     }
 
     /// `spoken` nil: the line was already said (GuidanceSession's "Got it").
     private func finish(spoken: String?, event: String) {
         tones.stop()
         processor.target = nil
+        if ["pickup", "hold_yes"].contains(event) {
+            Haptics.success()
+            tones.earcon(.success)
+            if let name = targetName, let target { room.remember(name, at: target) }
+        } else {
+            Haptics.warning()
+            tones.earcon(.failure)
+        }
         if let spoken { speaker.say(spoken, interrupt: true) }
         log(event, spoken ?? "", distance: handDistance)
         phase = ["pickup", "done_tap", "hold_yes"].contains(event) ? .done : .idle

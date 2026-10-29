@@ -19,7 +19,7 @@ nonisolated enum MetaAPIError: LocalizedError {
         switch self {
         case .missingKey: "No API key. Run tools/ios_secrets.sh, then rebuild."
         case .http(let code, let body): "HTTP \(code): \(body.prefix(200))"
-        case .emptyOutput: "SAM returned no text."
+        case .emptyOutput: "SAM returned no text."  // obsolete since 2026-10-29: empty = nothing found
         }
     }
 }
@@ -81,9 +81,9 @@ nonisolated enum MetaAPI {
         }
         let latency = Date().timeIntervalSince(start) * 1000
         ApiCallLog.append(image: imageLabel, model: samModel, noun: noun, latencyMS: latency, cost: samCostPerImage)
-        let text = doneText ?? deltas
-        guard !text.isEmpty else { throw MetaAPIError.emptyOutput }
-        return SAMResponse(text: text, latencyMS: latency)
+        // Empty output = SAM found no instance of the noun (2026-10-29: this used to throw and was
+        // logged as `api_error`; it is a normal "nothing here"). `emptyOutput` is no longer thrown.
+        return SAMResponse(text: doneText ?? deltas, latencyMS: latency)
     }
 }
 

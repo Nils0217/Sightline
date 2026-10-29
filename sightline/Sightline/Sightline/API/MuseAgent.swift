@@ -35,8 +35,13 @@ nonisolated enum MuseAgent {
 
     /// First item of the history: the user message (text + optional JPEG).
     static func userMessage(_ text: String, jpeg: Data?) -> [[String: Any]] {
+        userMessage(text, images: jpeg.map { [$0] } ?? [])
+    }
+
+    /// Text followed by several JPEGs in order (e.g. reference photo, then the current one).
+    static func userMessage(_ text: String, images: [Data]) -> [[String: Any]] {
         var content: [[String: Any]] = [["type": "input_text", "text": text]]
-        if let jpeg {
+        for jpeg in images {
             content.append(["type": "input_image", "image_url": "data:image/jpeg;base64,\(jpeg.base64EncodedString())"])
         }
         return [["type": "message", "role": "user", "content": content]]
@@ -57,20 +62,66 @@ nonisolated enum MuseAgent {
                         + "Answer with one word: yes or no.", noun: noun, jpeg: jpeg, label: label)
     }
 
-    /// After a tap ("I think I have it"): is the hand in this chest-camera crop holding or touching a `noun`?
-    static func verifyHolding(noun: String, jpeg: Data, label: String) async throws -> Bool? {
-        try await yesNo("This photo is from a chest camera of a blind user who asked for: \(noun). "
-                        + "Is their hand holding or touching a \(noun)? Answer with one word: yes or no.",
-                        noun: noun, jpeg: jpeg, label: label)
+    /// "I think I have it": is the hand holding the object. With `reference` (the object as seen at
+    /// lock), Spark must match that same object, and touching is not enough. 2026-10-29: "holding or
+    /// touching a book" said yes to a hand on a USB hub next to the book (the crop showed the book).
+    static func verifyHolding(noun: String, jpeg: Data, reference: Data?, label: String) async throws -> Bool? {
+        guard let reference else {
+            return try await yesNo("This photo is from a chest camera of a blind user who asked for: \(noun). "
+                                   + "Is their hand holding a \(noun) (gripping it, not just touching or near it)? "
+                                   + "Answer with one word: yes or no.", noun: noun, images: [jpeg], label: label)
+        }
+        return try await yesNo("A blind user asked for their \(noun). Image 1 shows that \(noun) where it was found. "
+                               + "Image 2 is from their chest camera now. Is their hand holding that same object from image 1 "
+                               + "(gripping it, not just touching it or something next to it)? Answer with one word: yes or no.",
+                               noun: noun, images: [reference, jpeg], label: label)
+    }
+
+    /// The scan gave up: one short spoken suggestion of where to look, from a wide photo. nil = no idea.
+    static func suggest(noun: String, jpeg: Data, label: String) async throws -> String? {
+        let text = try await reply("A blind user is looking for their \(noun). An object detector looked around the room and "
+                                   + "could not find it. This is their chest camera now. In one short sentence (at most 18 words) "
+                                   + "tell them where it most likely is or where to check next, using left, right, ahead, "
+                                   + "lower or higher and the furniture you see. If you can see it, say exactly where. "
+                                   + "If you have no idea, answer: none.",
+                                   noun: noun, images: [jpeg], effort: .minimal, label: label)
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return clean.isEmpty || clean.lowercased().hasPrefix("none") ? nil : clean
+    }
+
+    /// Room scan: the objects a blind user might ask for in this photo, as
+    /// `{"objects":[{"name":..,"x":..,"y":..}]}` (RoomInventory.parseSparkObjects).
+    static func listObjects(jpeg: Data, label: String) async throws -> String {
+        try await reply("You help a blind user remember where things are in their room. List up to 12 separate, movable "
+                        + "objects in this photo that they might later ask for (for example keys, phone, cup, book, "
+                        + "glasses, remote, bag, bottle). Skip furniture, walls and anything you are unsure about. "
+                        + "For each, give a short common name and the centre of the object in the photo as x and y "
+                        + "from 0 to 1 (x left to right, y top to bottom). Answer only with JSON: "
+                        + #"{"objects":[{"name":"cup","x":0.42,"y":0.61}]}"#,
+                        noun: "room_scan", images: [jpeg], effort: .medium, label: label)
     }
 
     private static func yesNo(_ prompt: String, noun: String, jpeg: Data, label: String) async throws -> Bool? {
+        try await yesNo(prompt, noun: noun, images: [jpeg], label: label)
+    }
+
+    private static func yesNo(_ prompt: String, noun: String, images: [Data], label: String) async throws -> Bool? {
+        let text = try await reply(prompt, noun: noun, images: images, effort: .minimal, label: label)
+        // First word decides ("No." / "Yes, ..."); "not sure" is not a no.
+        let first = text.lowercased().split(whereSeparator: { !$0.isLetter }).first.map(String.init)
+        if first == "yes" { return true }
+        if first == "no" { return false }
+        return nil
+    }
+
+    /// One plain Spark turn (no tools), logged. Returns "" on a non-200 answer.
+    private static func reply(_ prompt: String, noun: String, images: [Data], effort: Effort, label: String) async throws -> String {
         guard let key = APIKey.value else { throw MetaAPIError.missingKey }
         let body: [String: Any] = [
             "model": model,
-            "input": userMessage(prompt, jpeg: jpeg),
-            "reasoning": ["effort": Effort.minimal.rawValue],
-            "max_output_tokens": Effort.minimal.maxOutputTokens,
+            "input": userMessage(prompt, images: images),
+            "reasoning": ["effort": effort.rawValue],
+            "max_output_tokens": effort.maxOutputTokens,
         ]
         var request = URLRequest(url: MetaAPI.baseURL.appendingPathComponent("responses"))
         request.httpMethod = "POST"
@@ -83,19 +134,16 @@ nonisolated enum MuseAgent {
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
         let usage = json["usage"] as? [String: Any]
         let inTok = usage?["input_tokens"] as? Int ?? 0, outTok = usage?["output_tokens"] as? Int ?? 0
-        ApiCallLog.append(image: label, model: "\(model)/minimal", noun: noun, latencyMS: Date().timeIntervalSince(start) * 1000,
+        ApiCallLog.append(image: label, model: "\(model)/\(effort.rawValue)", noun: noun,
+                          latencyMS: Date().timeIntervalSince(start) * 1000,
                           cost: Double(inTok) / 1e6 * inputPerM + Double(outTok) / 1e6 * outputPerM,
                           inputTokens: inTok, outputTokens: outTok)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { return "" }
         var text = ""
         for item in json["output"] as? [[String: Any]] ?? [] where item["type"] as? String == "message" {
             for part in item["content"] as? [[String: Any]] ?? [] { text += part["text"] as? String ?? "" }
         }
-        // First word decides ("No." / "Yes, ..."); "not sure" is not a no.
-        let first = text.lowercased().split(whereSeparator: { !$0.isLetter }).first.map(String.init)
-        if first == "yes" { return true }
-        if first == "no" { return false }
-        return nil
+        return text
     }
 
     static func respond(history: [[String: Any]], effort: Effort, label: String) async throws -> SparkTurn {

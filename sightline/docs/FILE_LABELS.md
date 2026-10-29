@@ -46,7 +46,8 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `docs/G1_PLAN.md` | important, testing, verified | G1 hand-accuracy plan v2; gate passed 2026-10-27 |
 | `docs/G2_PLAN.md` | important, testing, verified | G2 mask → 3D target plan; gate passed 2026-10-28 |
 | `docs/G3_PLAN.md` | important, testing, needs-review | G3 world-map relocalization plan and run steps |
-| `docs/FIND_TEST.md` | important, testing, needs-review | Find-and-grab v1 flow and device test steps |
+| `docs/FIND_TEST.md` | important, testing, needs-review | Find-and-grab v5 changes, saved files and device test steps |
+| `docs/TEST_LOG.md` | important, testing, reference | Every device test: issue → root cause → solution → status, timestamped |
 | `docs/ARKIT_SAMPLE.md` | testing, reference | How to run Apple's ARKit sample on the iPhone (S0.1) |
 | `docs/assets/g1_marker_print.pdf` | testing, generated | Printable 10 cm G1 marker |
 | `tools/make_g1_marker.py` | testing, needs-review | Generates the G1 marker PNG + PDF |
@@ -58,7 +59,8 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `Packages/SightlineCore/Sources/SightlineCore/GuidanceSession.swift` | production, needs-review, important | Local find-and-grab state machine (opening lines, hand prompt, stop-and-go, pick-up); shared by app and simulator |
 | `Packages/SightlineCore/Sources/SightlineCore/HandModel.swift` | production, needs-review, important | Six hand keypoints (5 fingertips + palm centre) from Vision's 21 joints |
 | `Packages/SightlineCore/Sources/SightlineCore/ObjectModel.swift` | production, needs-review, important | Target as a 3D shape + support plane; fingertip grasp check; obstacle map |
-| `Packages/SightlineCore/Sources/SightlineCore/ScanPlanner.swift` | production, needs-review, important | Keep-scanning: when a new view deserves a SAM call; scan phrases |
+| `Packages/SightlineCore/Sources/SightlineCore/ScanPlanner.swift` | production, needs-review, important | Keep-scanning: when a new view deserves a SAM call; scan phrases; which way to turn next |
+| `Packages/SightlineCore/Sources/SightlineCore/RoomInventory.swift` | production, needs-review, important | Room map inventory (names + world positions, hints), Spark object-list parsing, LiDAR placement, small-object tiles |
 | `Packages/SightlineCore/Sources/SightlineSim/Replay.swift` | testing, needs-review | `SightlineSim replay <folder>`: object model + grasp check on a device recording (read-only) |
 | `Packages/SightlineCore/Sources/SightlineSim/` | testing, needs-review, important | Mac simulator of the guidance loop: `swift run SightlineSim` (stdout only, writes no files) |
 | `Sightline/Sightline.xcodeproj` | production, config | Xcode project |
@@ -72,6 +74,10 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `Sightline/Sightline/AR/` | production, needs-review, important | ARKit frame pipeline |
 | `Sightline/Sightline/Hand/` | production, needs-review | Vision hand pose |
 | `Sightline/Sightline/AR/HandKeypointLocator.swift` | production, needs-review, important | Six-point hand in world space (Vision joints + LiDAR) for Find |
+| `Sightline/Sightline/Find/RoomMapStore.swift` | production, needs-review, important | Saves and loads `Documents/room_map/` (ARWorldMap + inventory.json, overwritten per room scan) |
+| `Sightline/Sightline/Audio/AudioSessionKeeper.swift` | production, needs-review | Shared audio session: loudspeaker, re-apply after listen, interruptions and route changes, logged |
+| `Sightline/Sightline/Audio/Haptics.swift` | production, needs-review | Haptic cues for taps, reset, success, warning |
+| `Packages/SightlineCore/Tests/SightlineCoreTests/RoomInventoryTests.swift` | testing, needs-review | Room inventory, placement, tiles, scan directions |
 | `Sightline/Sightline/Find/DiagnosticRecorder.swift` | testing, needs-review, important | Recording mode: photo, SAM, overlay, screen, depth per event into `Documents/diagnostics/<launch>/` |
 | `logs/device/` (not in git) | generated, sensitive | Exported device logs and recordings (photos of Nils's room) |
 | `Sightline/Sightline/Spike/` | production, needs-review | G1, G2 and G3 test screens and models (remove from the release build later) |

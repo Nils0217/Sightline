@@ -3,6 +3,9 @@
 // works without sight. The camera view, dots and numbers are for sighted testers and the demo:
 // green = target, red = palm centre, small orange = visible fingertips.
 // Export sits top-right *above* the full-screen button (it was untappable inside the panel).
+// 2026-10-29 (blindfold test): tap = act, double tap = say the status, long press = reset.
+// With VoiceOver: double tap = act, two-finger double tap (magic tap) = act, rotor actions
+// "Status" and "Reset".
 
 import ARKit
 import RealityKit
@@ -14,9 +17,20 @@ struct FindView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             FindARContainer(model: model).ignoresSafeArea()
-            Button { model.tap() } label: { Color.clear.contentShape(Rectangle()) }
+            Color.clear.contentShape(Rectangle())
+                // Double tap first: a single tap waits ~0.3 s to be sure it is not a double tap.
+                .onTapGesture(count: 2) { model.speakStatus() }
+                .onTapGesture { model.tap() }
+                .onLongPressGesture(minimumDuration: 0.8) { model.reset() }
+                .accessibilityElement()
+                .accessibilityAddTraits(.isButton)
                 .accessibilityLabel(buttonLabel)
-                .accessibilityHint("Double tap, then say for example: find the cup.")
+                .accessibilityValue(model.statusLine())
+                .accessibilityHint("Then say for example: find the cup. Actions: status, reset.")
+                .accessibilityAction { model.tap() }
+                .accessibilityAction(.magicTap) { model.tap() }
+                .accessibilityAction(named: "Status") { model.speakStatus() }
+                .accessibilityAction(named: "Reset") { model.reset() }
             panel.allowsHitTesting(false)
         }
         .overlay(alignment: .topTrailing) { exportButton }
@@ -31,12 +45,14 @@ struct FindView: View {
         case .grabbing: "Check what I'm holding"
         case .verifying: "Checking"
         case .locating, .guiding, .searching: "Stop"
+        case .mapping: "Finish room scan"
         }
     }
 
     private var panel: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(headline).font(.title3.bold())
+            Text("tap = act · double tap = status · hold = reset").foregroundStyle(.secondary)
             Text("heard \"\(model.lastHeard)\"")
             Text("target \(model.targetName ?? "-")  SAM \(model.samCalls)/\(FindModel.maxSAMCalls)  tracking \(model.tracking)")
             Text("hand \(model.handStatus)  hand→target \(model.handDistance.map { String(format: "%.1f cm", $0 * 100) } ?? "-")  guide \(model.guidePhase)")
@@ -74,6 +90,7 @@ struct FindView: View {
         case .grabbing: "Grab it — tap to check it"
         case .verifying: "Checking what you hold…"
         case .done: "Done. Tap for a new search"
+        case .mapping: "Scanning the room — turn slowly, tap to finish"
         }
     }
 }

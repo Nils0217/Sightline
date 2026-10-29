@@ -113,3 +113,9 @@ Rate limits (per team): `muse-spark-1.3` 3000 RPM / 4M TPM; `sam-3.1` 3000 RPM.
 - **Live (2026-10-28, spike/agent_spike.py):** shapes work as documented; Spark used get_state / find_object / ask_user / say / select_target sensibly.
 - **Do not use `previous_response_id` for latency-sensitive loops.** Follow-up turns took 9.5–29.7 s with it vs 0.9–4.5 s when we resend the history (`input` = original message + each `function_call` item + its `function_call_output`). First turns ~1.2–1.8 s either way.
 - Putting the state in the first message removes the get_state turn: "I'm thirsty" 21 s → 7.8 s (manual history) → 4.8 s (+ state in prompt). Two-cups case 56 s → 8–13 s (medium; plus the user's answer time).
+
+## SAM 3.1: empty output = nothing found (2026-10-29)
+When the noun is not in the image, the stream completes with status 200 and **no `output_text` at all**: no records, and no error event. Treat this as "no instance", not as an error. Until v4 the app threw `emptyOutput`, so these calls were logged as `api_error` (`docs/TEST_LOG.md` 5.2). The call is still billed per image.
+
+## Muse Spark: several images in one message (2026-10-29)
+The strict hold check sends two `input_image` parts after the text, in order (reference photo, then the current hand crop), and refers to them as "image 1" and "image 2" in the prompt. The docs allow up to 50 images per request. This shape is built from the documented content-part format, but it has not been checked on the device yet; confirm it in the v5 run with the `hold_check_result` rows.
