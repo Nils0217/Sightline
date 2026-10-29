@@ -27,7 +27,8 @@ enum Replay {
                   let meta = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
             let kind = meta["kind"] as? String ?? "?"
             print("== \(prefix)")
-            if kind == "sam" {
+            if kind == "sam" || kind == "scan" {
+                printLocate(folder: folder, prefix: prefix, meta: meta)
                 guard let built = buildObject(folder: folder, prefix: prefix, meta: meta) else { print("   no object model"); continue }
                 object = built
                 objectName = meta["noun"] as? String ?? ""
@@ -68,6 +69,49 @@ enum Replay {
         }
     }
 
+    /// Old fixed-erosion target vs the adaptive one, per SAM record (was a detection dropped?).
+    static func printLocate(folder: String, prefix: String, meta: [String: Any]) {
+        guard let (records, depth, k, _) = load(folder: folder, prefix: prefix, meta: meta) else { return }
+        for r in records {
+            guard let raster = try? r.decodeMask() else { continue }
+            let mask = SourceMask(record: r, raster: raster)
+            func show(_ x: Result<MaskTargetResult, MaskTargetFailure>) -> String {
+                switch x {
+                case .success(let h): "ok (\(h.samples) samples)"
+                case .failure(let f): f.rawValue
+                }
+            }
+            print(String(format: "   SAM %@ c %.2f box %dx%d px: fixed %@, adaptive %@", r.id, r.confidence ?? 0,
+                         r.right - r.left, r.bottom - r.top,
+                         show(MaskTarget.locate(mask: mask, depth: depth, intrinsics: k)),
+                         show(MaskTarget.locateAdaptive(mask: mask, depth: depth, intrinsics: k))))
+        }
+    }
+
+    static func load(folder: String, prefix: String, meta: [String: Any])
+        -> ([SAMRecord], DepthImage, CameraIntrinsics, simd_float4x4)? {
+        let fm = FileManager.default
+        guard let samText = try? String(contentsOfFile: "\(folder)/\(prefix)_sam.txt", encoding: .utf8),
+              let depthData = fm.contents(atPath: "\(folder)/\(prefix)_depth.f32"),
+              let size = meta["depth_size"] as? [Int], let k = meta["intrinsics_raw"] as? [String: Double],
+              let cols = meta["camera_transform"] as? [[Double]], cols.count == 4 else { return nil }
+        let depth = depthData.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+        let conf = fm.contents(atPath: "\(folder)/\(prefix)_conf.u8").map { [UInt8]($0) }
+        let image = DepthImage(width: size[0], height: size[1], depth: depth, confidence: conf)
+        let intr = CameraIntrinsics(fx: Float(k["fx"]!), fy: Float(k["fy"]!), cx: Float(k["cx"]!), cy: Float(k["cy"]!),
+                                    imageSize: SIMD2(Float(k["width"]!), Float(k["height"]!)))
+        let c = cols.map { SIMD4(Float($0[0]), Float($0[1]), Float($0[2]), Float($0[3])) }
+        return (records(samText, meta: meta), image, intr, simd_float4x4(columns: (c[0], c[1], c[2], c[3])))
+    }
+
+    /// SAM records of a recording; tiled small-object calls (meta `tile_origins`) are placed back on the full image.
+    static func records(_ samText: String, meta: [String: Any]) -> [SAMRecord] {
+        guard let origins = meta["tile_origins"] as? [[Int]], let full = meta["image_size"] as? [Int], full.count == 2 else {
+            return SAMParser.parse(samText)
+        }
+        return SmallObjects.parseTiled(samText, origins: origins.map { SIMD2($0[0], $0[1]) }, fullSize: SIMD2(full[0], full[1]))
+    }
+
     static func buildObject(folder: String, prefix: String, meta: [String: Any]) -> ObjectModel? {
         let fm = FileManager.default
         guard let samText = try? String(contentsOfFile: "\(folder)/\(prefix)_sam.txt", encoding: .utf8),
@@ -82,7 +126,7 @@ enum Replay {
         let c = cols.map { SIMD4(Float($0[0]), Float($0[1]), Float($0[2]), Float($0[3])) }
         let t = simd_float4x4(columns: (c[0], c[1], c[2], c[3]))
         // Same choice as the app: most confident record.
-        guard let record = SAMParser.parse(samText).max(by: { ($0.confidence ?? 0) < ($1.confidence ?? 0) }),
+        guard let record = records(samText, meta: meta).max(by: { ($0.confidence ?? 0) < ($1.confidence ?? 0) }),
               let raster = try? record.decodeMask() else { return nil }
         return ObjectModel.build(mask: SourceMask(record: record, raster: raster), depth: image, intrinsics: intr, cameraTransform: t)
     }

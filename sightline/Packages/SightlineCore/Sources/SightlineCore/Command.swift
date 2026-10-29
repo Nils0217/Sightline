@@ -8,10 +8,14 @@ public enum Command: Equatable, Sendable {
     /// "find the cup" -> .find("cup")
     case find(String)
     case stop
+    /// "scan the room": one-time room map (objects + positions) for later hints.
+    case mapRoom
 }
 
 public enum CommandParser {
     private static let stopWords: Set<String> = ["stop", "cancel", "never mind", "nevermind", "done"]
+    private static let mapWords = ["scan the room", "map the room", "scan my room", "map my room", "learn the room",
+                                   "remember the room", "scan room", "map room"]
     /// Longest first so "where is my" wins over "where is".
     private static let leads = [
         "can you help me find", "help me find", "can you find", "could you find", "please find",
@@ -32,6 +36,7 @@ public enum CommandParser {
         if text.hasPrefix("sightline ") { text.removeFirst("sightline ".count) }
         guard !text.isEmpty else { return nil }
         if stopWords.contains(text) { return .stop }
+        if mapWords.contains(where: { text.contains($0) }) { return .mapRoom }
 
         guard let lead = leads.first(where: { text == $0 || text.hasPrefix($0 + " ") }) else { return nil }
         var words = text.dropFirst(lead.count).split(separator: " ").map(String.init)

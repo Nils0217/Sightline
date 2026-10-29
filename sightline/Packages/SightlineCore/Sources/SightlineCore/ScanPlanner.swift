@@ -69,6 +69,47 @@ public struct ScanPlanner: Sendable {
         "I don't see the \(noun) here. Turn slowly to your left and right. I'll keep looking."
     }
     public static let promptLine = "Still looking. Keep turning slowly."
+
+    /// Points to look at first (e.g. where the room map last saw the object), world space.
+    public var hint: SIMD3<Float>?
+
+    /// Which way to turn next (2026-10-29: "keep turning" alone gave no direction): toward the hint
+    /// while it is not yet searched, else the nearest compass sector not searched yet, else lower.
+    public func directionPrompt(cameraTransform t: simd_float4x4) -> String {
+        let dir = Self.direction(t)
+        let yaw = Self.yaw(dir)
+        let searched = Set(scanned.map { Self.sector($0) })
+        if let hint {
+            let camera = SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z)
+            let toHint = simd_normalize(hint - camera)
+            if scanned.allSatisfy({ Self.angle($0, toHint) >= minNewAngle }) {
+                let d = Self.wrap(Self.yaw(toHint) - yaw)
+                if abs(d) < minNewAngle { return toHint.y < dir.y - 0.3 ? "Point the phone a little lower." : "Hold still. Looking there now." }
+                return d > 0 ? "Turn right slowly, toward where I last saw it." : "Turn left slowly, toward where I last saw it."
+            }
+        }
+        // Nearest unsearched sector centre.
+        var best: Float?
+        for s in 0..<12 where !searched.contains(s) {
+            let centre = Float(s) * .pi / 6 - .pi + .pi / 12
+            let d = Self.wrap(centre - yaw)
+            if best == nil || abs(d) < abs(best!) { best = d }
+        }
+        if let d = best, abs(d) >= .pi / 12 {
+            return d > 0 ? "Turn right slowly. I haven't looked there yet." : "Turn left slowly. I haven't looked there yet."
+        }
+        // All round at this height: look lower (floors, low shelves) if not done yet.
+        if !scanned.contains(where: { $0.y < -0.6 }) { return "Point the phone lower, toward the floor, and turn slowly." }
+        return Self.promptLine
+    }
+
+    static func yaw(_ d: SIMD3<Float>) -> Float { atan2(d.x, -d.z) }
+    static func wrap(_ a: Float) -> Float {
+        var x = a
+        while x > .pi { x -= 2 * .pi }
+        while x <= -.pi { x += 2 * .pi }
+        return x
+    }
     public static func giveUpLine(_ noun: String) -> String {
         "I looked around and couldn't find the \(noun). Tap to try again."
     }
@@ -82,7 +123,7 @@ public struct ScanPlanner: Sendable {
     }
 
     static func sector(_ d: SIMD3<Float>) -> Int {
-        let yaw = atan2(d.x, -d.z)  // 0 = initial forward (−z)
+        let yaw = Self.yaw(d)  // 0 = initial forward (−z), + = right
         return (Int(floor((yaw + .pi) / (.pi / 6))) % 12 + 12) % 12
     }
 }

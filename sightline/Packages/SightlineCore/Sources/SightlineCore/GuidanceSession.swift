@@ -5,8 +5,9 @@
 //   announce : "Found the phone. It's ahead, a little to the right, about 50 centimetres."
 //              "Reach your hand forward and down, toward it."
 //   waitHand : repeats the hand prompt after 7 s of silence; on a steady hand -> "I see your hand."
-//   guiding  : StepGuide stop-and-go, palm centre -> nearest point of the object's surface
-//              (ObjectModel), with a warning when something stands in the straight path
+//   guiding  : StepGuide stop-and-go, palm centre -> ObjectModel.goal: the centre of flat objects
+//              (grabbed from above), the nearest surface point of solid ones; warns when something
+//              stands in the straight path
 //   grabbing : fingertips on the surface or palm within 7 cm -> "Stop. It's at your hand. Grab it."
 //   pick-up  : thumb opposite the fingers, then the hand leaves  -> "Got it."
 //              any other hand leaving after "Grab it"              -> checking (app asks Spark yes/no;
@@ -104,10 +105,13 @@ public struct GuidanceSession: Sendable {
             ? "Reach your hand forward and down, toward it."
             : "Hold your hand out in front of you, toward it."
         handPrompt = prompt
-        opening = [
-            SpokenLine(text: Self.whereIs(target: goal, cameraTransform: cameraTransform, name: targetName), interrupt: true),
-            SpokenLine(text: prompt, interrupt: false),
-        ]
+        opening = [SpokenLine(text: Self.whereIs(target: goal, cameraTransform: cameraTransform, name: targetName), interrupt: true)]
+        // Found at the edge of the view (often after a scan): turn first, or the hand leaves the
+        // picture on its way there (2026-10-29 simulator, not_in_view with the centre goal: 15/20).
+        if let turn = Self.faceLine(goal: goal, cameraTransform: cameraTransform) {
+            opening.append(SpokenLine(text: turn, interrupt: false))
+        }
+        opening.append(SpokenLine(text: prompt, interrupt: false))
     }
 
     /// Target moved (re-lock).
@@ -138,7 +142,7 @@ public struct GuidanceSession: Sendable {
     public mutating func update(time: Double, hand: HandKeypoints?, cameraTransform t: simd_float4x4,
                                 targetDepthDelta: Float?, speaking: Bool) -> GuidanceOutput {
         let ref = smooth(hand?.reference, time: time)
-        let goal = ref.map { object?.nearestSurfacePoint(to: $0) ?? target } ?? target
+        let goal = ref.map { object?.goal(for: $0) ?? target } ?? target
         let offset = ref.map { BodyOffset(from: $0, to: goal, cameraTransform: t) }
         let grasp = hand.flatMap { h in object.map { GraspAssessment.assess(h, object: $0) } }
         var out = GuidanceOutput(phase: phase, handDistance: offset?.length, grasp: grasp)
@@ -177,7 +181,9 @@ public struct GuidanceSession: Sendable {
             if let cue = guide.update(time: time, offset: offset, canInstruct: !speaking) {
                 switch cue.kind {
                 case .noHand:
-                    out.lines.append(SpokenLine(text: "I lost your hand. Hold it in front of the camera.", interrupt: false))
+                    // Hand lost on the way to an object near the edge of the view: turning brings both back in.
+                    let text = Self.faceLine(goal: goal, cameraTransform: t) ?? "I lost your hand. Hold it in front of the camera."
+                    out.lines.append(SpokenLine(text: text, interrupt: false))
                 case .stop:
                     out.lines.append(SpokenLine(text: cue.phrase, interrupt: true))
                 case .grab:
@@ -270,6 +276,21 @@ public struct GuidanceSession: Sendable {
     }
 
     /// "Found the phone. It's ahead, a little to the right, about 50 centimetres."
+    /// More than this off the camera's forward direction (horizontally) = ask the user to turn.
+    public static let faceAngle: Float = 20 * .pi / 180
+
+    /// "Turn a little to your left, to face it." when the goal is off to the side; nil when ahead.
+    public static func faceLine(goal: SIMD3<Float>, cameraTransform t: simd_float4x4) -> String? {
+        let camera = SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z)
+        let forward = -SIMD3(t.columns.2.x, 0, t.columns.2.z)
+        let to = SIMD3(goal.x - camera.x, 0, goal.z - camera.z)
+        guard simd_length(forward) > 0.1, simd_length(to) > 0.05 else { return nil }
+        let f = simd_normalize(forward), d = simd_normalize(to)
+        let angle = atan2(simd_cross(f, d).y, simd_dot(f, d))  // + = left (counter-clockwise from above)
+        guard abs(angle) > faceAngle else { return nil }
+        return angle > 0 ? "Turn a little to your left, to face it." : "Turn a little to your right, to face it."
+    }
+
     public static func whereIs(target: SIMD3<Float>, cameraTransform t: simd_float4x4, name: String) -> String {
         let camera = SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z)
         let o = BodyOffset(from: camera, to: target, cameraTransform: t)

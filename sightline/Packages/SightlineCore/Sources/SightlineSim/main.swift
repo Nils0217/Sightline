@@ -269,6 +269,8 @@ struct SimUser {
     var promptsHeard = 0
     /// Body yaw (radians, + = right), same convention as Camera.
     var facing: Float = 0
+    /// Still to turn (radians, + = right) after "Turn a little to your left/right, to face it."
+    var turnLeft: Float = 0
 
     mutating func hear(_ text: String, time: Double, scenario: Scenario) {
         pending.append((time + scenario.userReaction, text))
@@ -302,6 +304,12 @@ struct SimUser {
                 start = simd_quatf(angle: -facing, axis: SIMD3(0, 1, 0)).act(start)
                 plan = .raising(start + SIMD3(rng.gauss(0.04), rng.gauss(0.04), rng.gauss(0.04)))
             }
+            return
+        }
+        if text.hasPrefix("Turn a little to your") {
+            // Turns roughly toward the object (±25 % of the true angle), not past a full stop.
+            let want = atan2(target.x, -target.z) - facing
+            turnLeft = want * (1 + rng.uniform(-0.25, 0.25))
             return
         }
         if text.hasPrefix("Stop. It's at your hand") { plan = .grabbing(at: time + 0.8); return }
@@ -423,6 +431,8 @@ func run(_ sc: Scenario, seed: UInt64, maxTime: Double = 90) -> RunResult {
             for heard in speech.tick(time: t) {
                 note(t, "     heard: \(heard)")
                 if heard.hasPrefix("I don't see") || heard.hasPrefix("Still looking") { turning = turning == 0 ? 1 : turning }
+                if heard.hasPrefix("Turn right slowly") { turning = 1 }
+                if heard.hasPrefix("Turn left slowly") { turning = -1 }
             }
             if turning != 0 {
                 yaw += turning * 25 * .pi / 180 * Float(dt)
@@ -441,7 +451,7 @@ func run(_ sc: Scenario, seed: UInt64, maxTime: Double = 90) -> RunResult {
                 note(t, String(format: "SCAN at yaw %.0f°", yaw * 180 / .pi))
                 pendingScan = (t + 1.5, cam.sees(sc.object))
             case .prompt:
-                say(SpokenLine(text: ScanPlanner.promptLine, interrupt: false), t)
+                say(SpokenLine(text: planner.directionPrompt(cameraTransform: cam.transform), interrupt: false), t)
             case .giveUp:
                 say(SpokenLine(text: ScanPlanner.giveUpLine("phone"), interrupt: true), t)
                 note(t, "END  not found")
@@ -471,6 +481,14 @@ func run(_ sc: Scenario, seed: UInt64, maxTime: Double = 90) -> RunResult {
     while t < maxTime {
         t += dt
         live(sc.object)
+        if user.turnLeft != 0 {
+            // 25°/s, the same speed as the scan turn.
+            let step = min(abs(user.turnLeft), 25 * .pi / 180 * Float(dt)) * (user.turnLeft > 0 ? 1 : -1)
+            user.turnLeft -= step
+            yaw += step
+            user.facing = yaw
+            cam = Camera(height: 1.3, tiltDown: sc.cameraTiltDown, yaw: yaw)
+        }
 
         // Perception: keypoints the camera sees this frame.
         var hand: HandKeypoints?

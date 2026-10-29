@@ -23,9 +23,16 @@ import simd
 
     @Test func openingSaysWhereAndAsksForHand() {
         let s = GuidanceSession(targetName: "phone", target: [0.3, 0, -0.5], cameraTransform: Self.camera, time: 0)
+        // 31° to the right: turn to face it before reaching (2026-10-29).
+        #expect(s.opening.map(\.text) == ["Found the phone. It's to your right, about 60 centimetres.",
+                                          "Turn a little to your right, to face it.",
+                                          "Hold your hand out in front of you, toward it."])
+    }
+
+    @Test func noTurnWhenAhead() {
+        let s = GuidanceSession(targetName: "phone", target: [0.1, 0, -0.5], cameraTransform: Self.camera, time: 0)
         #expect(s.opening.count == 2)
-        #expect(s.opening[0].text == "Found the phone. It's to your right, about 60 centimetres.")
-        #expect(s.opening[1].text.hasPrefix("Hold your hand"))
+        #expect(GuidanceSession.faceLine(goal: [-0.5, 0, -0.5], cameraTransform: Self.camera) == "Turn a little to your left, to face it.")
     }
 
     @Test func handPromptRepeatsOnlyAfterSpeechEnds() {

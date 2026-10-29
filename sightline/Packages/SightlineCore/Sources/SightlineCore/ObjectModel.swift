@@ -42,6 +42,20 @@ public struct ObjectModel: Sendable {
 
     public func distanceToSurface(_ p: SIMD3<Float>) -> Float { simd_distance(nearestSurfacePoint(to: p), p) }
 
+    /// Distance from `p` to the object's footprint seen from above (0 when directly over it).
+    public func horizontalDistance(_ p: SIMD3<Float>) -> Float {
+        points.map { q in
+            let d = SIMD2(q.x - p.x, q.z - p.z)
+            return simd_length(d)
+        }.min()!
+    }
+
+    /// Where guidance steers the palm: flat objects are grabbed from above, so their centre (the
+    /// nearest edge led the hand beside the book, 2026-10-29); solid ones from the nearest side.
+    public func goal(for palm: SIMD3<Float>) -> SIMD3<Float> {
+        isFlat ? centre : nearestSurfacePoint(to: palm)
+    }
+
     /// Same shape moved (re-lock found it a little elsewhere).
     public func moved(by d: SIMD3<Float>) -> ObjectModel {
         ObjectModel(points: points.map { $0 + d }, supportHeight: supportHeight.map { $0 + d.y }, isFlat: isFlat)
@@ -135,11 +149,20 @@ public struct GraspAssessment: Sendable, Equatable {
     public var opposed: Bool
     /// Palm centre to the nearest surface point (m).
     public var palmToSurface: Float?
+    /// Flat objects only: the palm is above the object's footprint (not beside its edge).
+    /// Always true for solid objects, which are gripped from the side.
+    public var palmOver: Bool = true
     /// At least two fingertips on it, or one plus the palm within 7 cm (the 2026-10-28 phone grab:
     /// only the thumb had depth, palm 6.1 cm from the surface; the other tips were on the glossy screen).
-    public var touching: Bool { tipsNear >= 2 || (tipsNear >= 1 && (palmToSurface ?? .infinity) <= 0.07) }
+    /// Flat objects also need `palmOver` (2026-10-29 test: the hand stopped beside the book's corner and
+    /// grabbed the USB hub next to it).
+    public var touching: Bool {
+        palmOver && (tipsNear >= 2 || (tipsNear >= 1 && (palmToSurface ?? .infinity) <= 0.07))
+    }
 
     public static let touchDistance: Float = 0.03
+    /// Palm-over-footprint test for flat objects: horizontal distance to the nearest object point.
+    public static let overMargin: Float = 0.03
 
     public static func assess(_ hand: HandKeypoints, object: ObjectModel) -> GraspAssessment {
         let near = hand.tips.filter { object.distanceToSurface($0.value) <= touchDistance + 0.01 }
@@ -157,8 +180,12 @@ public struct GraspAssessment: Sendable, Equatable {
             }
         }
         let strict = near.filter { object.distanceToSurface($0.value) <= touchDistance }.count
+        var over = true
+        if object.isFlat {
+            over = hand.reference.map { object.horizontalDistance($0) <= overMargin } ?? false
+        }
         return GraspAssessment(tipsNear: strict, opposed: opposed,
-                               palmToSurface: hand.reference.map { object.distanceToSurface($0) })
+                               palmToSurface: hand.reference.map { object.distanceToSurface($0) }, palmOver: over)
     }
 }
 

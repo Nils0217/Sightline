@@ -81,6 +81,22 @@ public enum MaskTarget {
     ///   - erosion: a depth pixel counts only if source pixels this far away (in 4 directions) are also
     ///     in the mask; keeps samples off the object edge where depth mixes with the background.
     ///   - minConfidence: lowest `ARConfidenceLevel` raw value accepted.
+    /// `locate`, relaxing erosion and sample count for small masks. 2026-10-29: SAM found the keys
+    /// (12x16 px, c 0.61) but erosion 3 left too few depth samples and the detection was dropped.
+    public static func locateAdaptive(mask: SourceMask, depth: DepthImage,
+                                      intrinsics: CameraIntrinsics) -> Result<MaskTargetResult, MaskTargetFailure> {
+        var last = MaskTargetFailure.tooFewDepthSamples
+        for (erosion, minConfidence, minSamples) in [(3, UInt8(1), 8), (1, 1, 4), (0, 0, 2)] {
+            switch locate(mask: mask, depth: depth, intrinsics: intrinsics, erosion: erosion,
+                          minConfidence: minConfidence, minSamples: minSamples) {
+            case .success(let r): return .success(r)
+            case .failure(.emptyMask): return .failure(.emptyMask)
+            case .failure(let f): last = f
+            }
+        }
+        return .failure(last)
+    }
+
     public static func locate(mask: SourceMask, depth: DepthImage, intrinsics: CameraIntrinsics,
                               erosion: Int = 3, minConfidence: UInt8 = 1,
                               minSamples: Int = 8) -> Result<MaskTargetResult, MaskTargetFailure> {
