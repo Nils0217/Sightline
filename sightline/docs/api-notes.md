@@ -1,4 +1,6 @@
 <!-- labels: reference, important -->
+
+> 2026-10-30 更新：本文件保留原始實驗／參考紀錄；目前取物行為、成本計數與驗收以 [PRD](PRD.md)、[人因修訂](HUMAN_FACTORS.md) 與 [FIND_TEST](FIND_TEST.md) 為準。歷史通過結果不代表新版本已完成實機或視障使用者驗證。
 # Meta Model API notes
 
 Verified against the official docs on 2026-10-27. Update this file whenever a request shape is confirmed or changes on a live call.
@@ -119,3 +121,11 @@ When the noun is not in the image, the stream completes with status 200 and **no
 
 ## Muse Spark: several images in one message (2026-10-29)
 The strict hold check sends two `input_image` parts after the text, in order (reference photo, then the current hand crop), and refers to them as "image 1" and "image 2" in the prompt. The docs allow up to 50 images per request. This shape is built from the documented content-part format, but it has not been checked on the device yet; confirm it in the v5 run with the `hold_check_result` rows.
+
+## 本版呼叫計數（2026-10-30）
+
+API request shape 未改動，沒有重新宣稱官方價格已查核。完整持有確認最多使用兩個影格，各一次 SAM 與一次 Spark，第二次必須有有效共同位移；第一影格證據不足會提前保留不確定。SAM 檢查總預算每搜尋十二次，耗盡時不允許 Spark 單獨確認。所有呼叫仍為事件觸發；價格／延遲依新實測日誌和帳單更新，不沿用舊單影格估算。
+
+## 有限次確認呼叫更新（本輪，取代上段計數）
+
+每搜尋一個確認循環，最多三次 SAM；僅在該張有候選時做一次參考身份比對，最多三次 Spark。身份提示明確只比較原物件與畫框候選，握持由本機共同移動證據處理。請求格式、端點與模型未改；未呼叫真實 API 驗證本輪提示的辨識品質或費用。

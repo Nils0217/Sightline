@@ -41,6 +41,8 @@ public struct GuidanceCue: Sendable, Equatable {
     public var kind: Kind
     public var phrase: String
     public var key: String
+    /// Same axis and direction as the previous instruction ("Keep going down."), whatever the wording.
+    public var repeated = false
 }
 
 /// Continuous cues, one per correction. **Obsolete for the find flow** since the 2026-10-28 device

@@ -1,4 +1,6 @@
 <!-- labels: important, testing, needs-review -->
+
+> 2026-10-30 更新：本文件保留原始實驗／參考紀錄；目前取物行為、成本計數與驗收以 [PRD](PRD.md)、[人因修訂](HUMAN_FACTORS.md) 與 [FIND_TEST](FIND_TEST.md) 為準。歷史通過結果不代表新版本已完成實機或視障使用者驗證。
 # G1 — Hand 3D accuracy: plan (v2)
 
 Status: **awaiting Nils's approval**. v2 folds in an external review (2026-10-27).

@@ -36,7 +36,13 @@ public enum CommandParser {
         if text.hasPrefix("sightline ") { text.removeFirst("sightline ".count) }
         guard !text.isEmpty else { return nil }
         if stopWords.contains(text) { return .stop }
-        if mapWords.contains(where: { text.contains($0) }) { return .mapRoom }
+        // "scan the room for my keys" is a search, not a room map (Muse review 2026-10-30).
+        if let r = text.range(of: " for "), text.contains("room"), text.contains("scan") || text.hasPrefix("map") {
+            return parse("find " + text[r.upperBound...])
+        }
+        // v5 test: "scan the room" came back as "Scanner room".
+        if mapWords.contains(where: { text.contains($0) })
+            || (text.split(separator: " ").contains("room") && (text.contains("scan") || text.hasPrefix("map"))) { return .mapRoom }
 
         guard let lead = leads.first(where: { text == $0 || text.hasPrefix($0 + " ") }) else { return nil }
         var words = text.dropFirst(lead.count).split(separator: " ").map(String.init)

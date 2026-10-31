@@ -30,10 +30,10 @@ import Testing
         var inv = RoomInventory(created: t0)
         inv.remember("keys", at: [1.0, 0, -0.3], date: t0, source: "found")
         let text = RoomInventory.hint(inv.match("keys")!, noun: "keys", cameraTransform: matrix_identity_float4x4)
-        #expect(text == "Your keys were last seen to your right, about 1 metre away.")
+        #expect(text == "Your keys were last seen a quarter turn to your right, about 1 metre away.")
         let behind = RoomItem(name: "cup", position: [-0.5, 0, 1.5], seen: t0, source: "found")
         #expect(RoomInventory.hint(behind, noun: "cup", cameraTransform: matrix_identity_float4x4)
-                == "Your cup was last seen behind you, on your left, about 2 metres away.")
+                == "Your cup was last seen behind you, half a turn to your left, about 2 metres away.")
     }
 
     @Test func parsesSparkObjectList() {
@@ -55,6 +55,18 @@ import Testing
         #expect(placed.sourceWidth == 698 && placed.maskWidth == 20)
         #expect(SmallObjects.isSmall("my keys") && !SmallObjects.isSmall("water bottle"))
     }
+
+    /// v5 test: after the keys were picked up, the hint still pointed at the spot they were lifted from.
+    @Test func carriedObjectIsForgotten() {
+        var inv = RoomInventory(created: t0)
+        inv.remember("keys", at: [1, 0, 0], date: t0, source: "room_scan")
+        inv.remember("key", at: [1.1, 0, 0], date: t0, source: "found")
+        inv.remember("keys", at: [-2, 0, 0], date: t0, source: "room_scan")
+        inv.remember("cup", at: [1, 0, 0], date: t0, source: "room_scan")
+        inv.carried("key", from: [1.1, 0, 0])
+        #expect(inv.items.map(\.name).sorted() == ["cup", "keys"])
+        #expect(inv.match("key")?.world == SIMD3<Float>(-2, 0, 0))
+    }
 }
 
 @Suite struct RoomPlacementTests {
@@ -70,6 +82,8 @@ import Testing
     @Test func mapCommand() {
         #expect(CommandParser.parse("scan the room") == .mapRoom)
         #expect(CommandParser.parse("Sightline, map my room please") == .mapRoom)
+        #expect(CommandParser.parse("Scanner room") == .mapRoom)  // v5 mishearing
+        #expect(CommandParser.parse("find the room key") == .find("room key"))
         #expect(CommandParser.parse("find the room key") == .find("room key"))
     }
 }
@@ -88,7 +102,7 @@ import Testing
         var p = ScanPlanner(time: 0)
         p.markSearched(cameraTransform: camera(yaw: 0))
         p.hint = SIMD3(-1, -0.3, 0)  // to the left
-        #expect(p.directionPrompt(cameraTransform: camera(yaw: 0)) == "Turn left slowly, toward where I last saw it.")
+        #expect(p.directionPrompt(cameraTransform: camera(yaw: 0)) == "Turn left, about a quarter turn, toward where I last saw it.")
     }
 
     @Test func asksToLookLowerAfterAFullCircle() {

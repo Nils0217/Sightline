@@ -1,12 +1,7 @@
 // labels: production, needs-review, important
-// Stop-and-go hand guidance (replaces GuidanceController's continuous cues after the first
-// device test, 2026-10-28: constant centimetre updates while the hand moved were noise).
-//
-//   hand still  -> one instruction: "Right, about 20 centimetres."
-//   hand moving -> silent (tones only)
-//   reached / overshot that axis -> "Stop."
-//   hand still again -> next instruction, until the hand is at the object -> "Stop. Grab it."
-// "I can't see your hand" only after a grace period, and rarely.
+// Stop-and-go cues for the current approach waypoint. GuidanceSession checks the active and
+// next instruction axes before permitting motion. Proximity requests tactile exploration,
+// not a claim of contact or a command to grip. Legacy state names are retained for callers.
 
 import simd
 
@@ -23,9 +18,12 @@ public struct StepGuide: Sendable {
     }
 
     /// 3D hand-to-target distance that counts as at the object (hand point may be the palm).
-    public var grabRadius: Float = 0.06
+    public var grabRadius: Float = 0.04
     /// An axis is "reached" when its remaining offset is below this.
     public var axisTolerance: Float = 0.03
+    /// A new instruction on an axis needs at least this much offset (hysteresis against axisTolerance;
+    /// v6 run 2: "A little right." / "Stop." five times while the offset sat at 3–4 cm).
+    public var startTolerance: Float = 0.05
     /// Hand speed below this (m/s) counts as still.
     public var stillSpeed: Float = 0.04
     /// Must be still this long before a new instruction.
@@ -62,7 +60,7 @@ public struct StepGuide: Sendable {
 
         if offset.length <= grabRadius {
             state = .grabbing
-            return GuidanceCue(kind: .grab, phrase: "Stop. It's at your hand. Grab it.", key: "grab")
+            return GuidanceCue(kind: .grab, phrase: "Stop. The object is nearby. Explore slowly with your fingertips.", key: "grab")
         }
 
         switch state {
@@ -99,7 +97,7 @@ public struct StepGuide: Sendable {
     }
 
     private mutating func instruct(_ o: BodyOffset, time: Double) -> GuidanceCue {
-        let (axis, v) = Self.dominantAxis(o, tolerance: axisTolerance)
+        let (axis, v) = Self.dominantAxis(o, tolerance: startTolerance)
         let sign: Float = v >= 0 ? 1 : -1
         let repeated = lastInstruction.map { $0.axis == axis && $0.sign == sign } ?? false
         lastInstruction = (axis, sign)
@@ -107,25 +105,28 @@ public struct StepGuide: Sendable {
         let cm = Int((abs(v) * 100).rounded())
         let word: String
         switch (axis, v >= 0) {
-        case (.right, true): word = "Right"
-        case (.right, false): word = "Left"
-        case (.up, true): word = "Up"
-        case (.up, false): word = "Down"
-        case (.forward, true): word = "Forward"
-        case (.forward, false): word = "Back"
+        case (.right, true): word = "Move your hand right"
+        case (.right, false): word = "Move your hand left"
+        case (.up, true): word = "Move your hand up"
+        case (.up, false): word = "Move your hand down"
+        case (.forward, true): word = "Move your hand forward"
+        case (.forward, false): word = "Move your hand back"
         }
         let phrase: String
-        if cm < 6 { phrase = "A little \(word.lowercased())." }
-        else if repeated { phrase = "Keep going \(word.lowercased())." }
+        if cm < 6 { phrase = "\(word), a little." }
+        else if repeated { phrase = "\(word), slowly." }
         else { phrase = "\(word), about \(GuidanceController.rounded(cm)) centimetres." }
-        return GuidanceCue(kind: .move, phrase: phrase, key: "\(word)-\(GuidanceController.rounded(cm))")
+        return GuidanceCue(kind: .move, phrase: phrase, key: "\(word)-\(GuidanceController.rounded(cm))", repeated: repeated)
     }
 
-    /// Largest lateral correction first; forward only once the hand is lined up.
+    /// Left/right first, then forward/back, then up/down (Nils, 2026-10-30: the palm only steers
+    /// left/right; "down" first kept a hand on the table waiting while the object was ahead-right).
     static func dominantAxis(_ o: BodyOffset, tolerance: Float) -> (Axis, Float) {
-        let lateral: (Axis, Float) = abs(o.right) >= abs(o.up) ? (.right, o.right) : (.up, o.up)
-        if abs(lateral.1) >= tolerance && abs(lateral.1) >= abs(o.forward) * 0.5 { return lateral }
-        return (.forward, o.forward)
+        if abs(o.right) >= tolerance { return (.right, o.right) }
+        if abs(o.forward) >= tolerance { return (.forward, o.forward) }
+        if abs(o.up) >= tolerance { return (.up, o.up) }
+        // All small but not yet at the object: the largest one.
+        return [(Axis.right, o.right), (.forward, o.forward), (.up, o.up)].max { abs($0.1) < abs($1.1) }!
     }
 
     static func value(_ o: BodyOffset, _ axis: Axis) -> Float {
@@ -195,5 +196,72 @@ public struct PickupDetector: Sendable {
         }
         accumulated = delta >= farther ? accumulated + dt : max(0, accumulated - dt)
         return accumulated >= hold
+    }
+}
+
+/// Picking something up, whatever it is (Nils, 2026-10-30 v7: "用戶一抓起任何東西要馬上啟動判定").
+/// Hand shape cannot tell a grip on the device (camera from above, fingertip depth jumps; v6/v7
+/// recordings), so this watches the palm, whose joints track well:
+///   armed : the palm stays within `lowAbove` of the table for `dwell` (reaching and taking hold)
+///   lift  : then rises `rise` above its lowest point for `riseHold` -> "lift"
+///   lost  : or the hand disappears for `lostAfter` while armed (fingers around an object hide it)
+/// -> "hand_lost_low". Disarmed after firing until the palm is low again.
+public struct LiftDetector: Sendable {
+    public var lowAbove: Float = 0.09  // palm over a gripped phone: 5–8 cm above the table
+    public var dwell: Double = 0.4
+    public var rise: Float = 0.05
+    public var riseHold: Double = 0.15
+    public var lostAfter: Double = 0.8
+
+    private var lowSince: Double?
+    private var lowStartY: Float?
+    private var armed = false
+    private var lowest: Float = .infinity
+    private var riseSince: Double?
+    private var lastSeen: Double?
+
+    public init() {}
+
+    public mutating func disarm() {
+        armed = false
+        lowSince = nil
+        riseSince = nil
+        lowest = .infinity
+    }
+
+    /// - Returns: the reason when a pick-up is seen this frame, else nil.
+    public mutating func update(time: Double, palmY: Float?, tableY: Float) -> String? {
+        guard let y = palmY else {
+            if armed, let seen = lastSeen, time - seen >= lostAfter {
+                disarm()
+                return "hand_lost_low"
+            }
+            return nil
+        }
+        lastSeen = time
+        // Above the surface, not below it (sim late_hand: a hand in the lap, rising into view).
+        if y <= tableY + lowAbove && y >= tableY - 0.02 {
+            // Resting there, not passing through (a hand coming up from the lap crosses this band).
+            if let start = lowStartY, abs(y - start) > 0.03, !armed { lowSince = nil }
+            if lowSince == nil { lowStartY = y }
+            let since = lowSince ?? time
+            lowSince = since
+            if time - since >= dwell { armed = true }
+        } else if !armed {
+            lowSince = nil
+        }
+        guard armed else { return nil }
+        lowest = min(lowest, y)
+        if y >= lowest + rise {
+            let since = riseSince ?? time
+            riseSince = since
+            if time - since >= riseHold {
+                disarm()
+                return "lift"
+            }
+        } else {
+            riseSince = nil
+        }
+        return nil
     }
 }

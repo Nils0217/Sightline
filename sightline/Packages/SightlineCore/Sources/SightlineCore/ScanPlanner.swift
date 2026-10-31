@@ -17,6 +17,10 @@ public struct ScanPlanner: Sendable {
     public var budget = 8
     /// Repeat "keep turning" after this long without speech.
     public var promptEvery: Double = 8
+    /// "Keep turning" this many times with no new view in between -> give up (v7: the user did not turn,
+    /// no SAM call was ever made, and "Still looking. Keep turning slowly." repeated until he stopped it).
+    public var maxIdlePrompts = 3
+    private var idlePrompts = 0
 
     public private(set) var scanned: [SIMD3<Float>] = []
     public private(set) var used = 0
@@ -51,11 +55,14 @@ public struct ScanPlanner: Sendable {
         if !busy, steady, isNew, time - lastScan >= minGap {
             lastScan = time
             used += 1
+            idlePrompts = 0
             scanned.append(dir)
             return .scan
         }
-        if !speaking, time - lastPrompt >= promptEvery {
+        if !speaking, !busy, time - lastPrompt >= promptEvery {
             lastPrompt = time
+            if idlePrompts >= maxIdlePrompts { return .giveUp }
+            idlePrompts += 1
             return .prompt
         }
         return .wait
@@ -72,6 +79,25 @@ public struct ScanPlanner: Sendable {
 
     /// Points to look at first (e.g. where the room map last saw the object), world space.
     public var hint: SIMD3<Float>?
+    /// The hint is Spark's guess from nearby things, not a sighting of the object.
+    public var hintIsGuess = false
+
+    /// "left a little", "right, about a quarter turn", "left, about half a turn" for a yaw
+    /// difference `d` (radians, + = right).
+    public static func turn(_ d: Float) -> String {
+        let side = d > 0 ? "right" : "left"
+        let deg = abs(d) * 180 / .pi
+        if deg < TurnSize.littleBelow { return "\(side) a little" }
+        if deg < TurnSize.quarterBelow { return "\(side), about a quarter turn" }
+        return "\(side), about half a turn"
+    }
+
+    /// Room scan ("scan the room"): always one way round, so the user is never sent back and forth
+    /// (v5 test: the search prompts flipped left/right and said "I haven't looked there yet").
+    public func mappingPrompt(cameraTransform t: simd_float4x4) -> String {
+        if sectorsCovered >= 11 { return "That's a full circle. Tap when you are done." }
+        return sectorsCovered <= 1 ? "Turn slowly to your right." : "Keep turning right, slowly."
+    }
 
     /// Which way to turn next (2026-10-29: "keep turning" alone gave no direction): toward the hint
     /// while it is not yet searched, else the nearest compass sector not searched yet, else lower.
@@ -85,7 +111,8 @@ public struct ScanPlanner: Sendable {
             if scanned.allSatisfy({ Self.angle($0, toHint) >= minNewAngle }) {
                 let d = Self.wrap(Self.yaw(toHint) - yaw)
                 if abs(d) < minNewAngle { return toHint.y < dir.y - 0.3 ? "Point the phone a little lower." : "Hold still. Looking there now." }
-                return d > 0 ? "Turn right slowly, toward where I last saw it." : "Turn left slowly, toward where I last saw it."
+                // v5 test: "turn left" alone gave no idea how far; "behind you" needs half a turn.
+                return "Turn \(Self.turn(d)), toward \(hintIsGuess ? "where it might be" : "where I last saw it")."
             }
         }
         // Nearest unsearched sector centre.

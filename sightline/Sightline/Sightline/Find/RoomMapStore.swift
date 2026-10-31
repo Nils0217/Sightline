@@ -63,6 +63,17 @@ final class RoomMapStore {
         try? encoder.encode(inventory).write(to: Self.inventoryURL, options: .atomic)
     }
 
+    /// Picked up (pick-up confirmed): it is with the user now, not where it was found.
+    func carried(_ name: String, from p: SIMD3<Float>?) {
+        guard active, var inv = inventory else { return }
+        inv.carried(name, from: p)
+        inventory = inv
+        saveInventory()
+    }
+
+    /// Everything the map knows, when it is active (for Spark's "where might it be" guess and the agent).
+    var activeInventory: RoomInventory? { active ? inventory : nil }
+
     /// Hint for a noun when the map is active: the item and where it is.
     func item(for noun: String) -> RoomItem? { active ? inventory?.match(noun) : nil }
 }

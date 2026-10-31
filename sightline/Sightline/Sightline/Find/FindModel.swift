@@ -1,20 +1,8 @@
 // labels: production, needs-review, important
-// Find-and-grab session (PRD "Find and grab"):
-//   tap -> listen -> parse noun locally -> say "Looking for the cup" at once -> SAM on the
-//   current frame -> mask + LiDAR -> world target -> GuidanceSession (SightlineCore, same code
-//   as the Mac simulator): where the object is -> "Hold your hand out" -> "I see your hand" ->
-//   stop-and-go steps on the palm centre (six-point hand) -> "Grab it" -> pick-up -> "Got it."
-// Recording mode (DiagnosticRecorder) saves photo + SAM + overlay on every SAM call and on hand
-// events, for diagnosing the device left bias offline.
-// Muse Spark (tool calling, Find/AgentTools) steps in only off the fast path: commands the local
-// parser cannot read (effort minimal) and several plausible SAM matches (effort medium).
-// Cloud is called only on events (lock, re-lock after tracking recovers); ≤ 5 SAM calls per
-// find session. The guidance loop never waits on the network.
-// 2026-10-29 (after the 9d77d1e device test, docs/TEST_LOG.md): speech watchdog + audio session
-// keeper, SAM empty output = "nothing found" (not an error), small objects tiled 2x2, strict hold
-// check (reference photo + "is it still on the table"), scan says which way to turn and asks Spark
-// for a guess when it gives up, room map ("scan the room"), and blind controls: every tap answers
-// at once, double tap = status, long press = reset, haptics and earcons.
+// Find-and-explore app orchestration: calibrated reach, current-frame local geometry,
+// explicit Stop/Status/Check controls and token-isolated event-driven cloud calls.
+// Automatic confirmation requires two frame-aligned hand/object observations and affirmative
+// reference-image checks, never Spark or disappearance alone. See docs/HUMAN_FACTORS.md.
 
 import ARKit
 import AVFoundation
@@ -30,7 +18,12 @@ final class FindModel {
         case idle, listening, locating, searching, guiding, grabbing, verifying, done, mapping
     }
 
-    static let maxSAMCalls = 5
+    /// SAM calls per search outside the scan (lock, re-lock, agent find_object). Was 5 (v5 test: the
+    /// agent needs several finds to see which options are here).
+    static let maxSAMCalls = 12
+    /// SAM hold-check calls per search; an exhausted budget retains uncertainty.
+    /// The session asks for at most `GuidanceSession.maxAutoChecks` automatic checks.
+    static let maxHoldSAMCalls = 12
 
     private(set) var phase = Phase.idle
     private(set) var targetName: String?
@@ -47,6 +40,11 @@ final class FindModel {
     private(set) var lastCue = ""
     private(set) var tracking = "-"
     private(set) var samCalls = 0
+    @ObservationIgnored private var holdSAMCalls = 0
+    /// One per hold check: a timer or result of an older check must not end a newer one (v6 run 2: the
+    /// 25 s timer of a previous check fired 0.2 s into a new one, three times).
+    @ObservationIgnored private var holdCheckID = 0
+    @ObservationIgnored private var lifecycleObservers: [NSObjectProtocol] = []
     private(set) var logURL: URL?
 
     let session = ARSession()
@@ -66,7 +64,6 @@ final class FindModel {
     @ObservationIgnored private var mapInFlight = 0
     @ObservationIgnored private var mapViews = 0
     @ObservationIgnored private var guide: GuidanceSession?
-    @ObservationIgnored private var doneAt: Date?
     /// Keep-scanning state while the object is not in view (ScanPlanner decides when to call SAM).
     @ObservationIgnored private var scan: ScanPlanner?
     @ObservationIgnored private var scanInFlight = false
@@ -76,17 +73,149 @@ final class FindModel {
     /// Where each object was last locked during this app launch (world space; not across launches:
     /// loading the G3 world map at start would block tracking in any other room).
     @ObservationIgnored private var lastSeen: [String: SIMD3<Float>] = [:]
-    @ObservationIgnored private var resumePhase = Phase.grabbing
     @ObservationIgnored private var lastFrameTime: Double = 0
     @ObservationIgnored private let recorder = DiagnosticRecorder()
     @ObservationIgnored weak var arView: ARView?
     @ObservationIgnored private var lastCamera = matrix_identity_float4x4
     @ObservationIgnored private var sessionStart: Date?
-    @ObservationIgnored private var wasTrackingLimited = false
     @ObservationIgnored private var logRows: [String] = []
     @ObservationIgnored private var sessionID = 0
     @ObservationIgnored private var candidates: [Candidate] = []
+    /// Agent: phrases find_object looked for with nothing found in this search, and finds so far.
+    @ObservationIgnored private var notFound: [String] = []
+    @ObservationIgnored private var agentFinds = 0
     @ObservationIgnored private var lastJPEG: Data?
+
+    private(set) var reachDistance: Float?
+    private(set) var calibrating = false
+    private(set) var selectedHand = "right"
+    private(set) var safetyMessage: String?
+    @ObservationIgnored private var calibration = ReachCalibration()
+    @ObservationIgnored private var calibrationDeadline: Double?
+    @ObservationIgnored private var calibrationStarted: Double?
+    private(set) var needsUserDecision = false
+    @ObservationIgnored private var holdVerification = HoldVerification()
+    @ObservationIgnored private var holdCycleStarted = false
+    @ObservationIgnored private var holdMovementIssued = false
+    @ObservationIgnored private var activeHoldMovement: (context: HoldMovementContext, intrinsics: CameraIntrinsics)?
+    @ObservationIgnored private var holdMovementCapture: HoldMovementCapture?
+    @ObservationIgnored private var holdCaptureSerial = 0
+    @ObservationIgnored private var holdCapturePending = false
+    @ObservationIgnored private var holdObservationInFlight = false
+    @ObservationIgnored private var handTrace = HandTrace()
+    @ObservationIgnored private var holdScene: (time: Double, map: ObstacleMap)?
+    @ObservationIgnored private var reachFrame: simd_float4x4?
+    @ObservationIgnored private var lastInputFrame: Double = 0
+    @ObservationIgnored private var frameWatchdog: Task<Void, Never>?
+
+    private func clearHoldCollection() {
+        holdMovementCapture = nil
+        activeHoldMovement = nil
+        holdCapturePending = false
+        holdObservationInFlight = false
+    }
+
+    private func resetHoldCycle() {
+        clearHoldCollection()
+        holdVerification = HoldVerification()
+        holdCaptureSerial = 0
+        holdCycleStarted = false
+        holdMovementIssued = false
+        needsUserDecision = false
+        handTrace = HandTrace()
+        holdScene = nil
+    }
+
+    func newSearch() {
+        stop()
+        guard reachDistance != nil else { explainSetup(); return }
+        listen()
+    }
+
+    func beginReachCalibration(hand: String) {
+        stop()
+        selectedHand = hand
+        reachDistance = nil
+        calibration = ReachCalibration()
+        calibrating = true
+        calibrationStarted = nil
+        calibrationDeadline = ProcessInfo.processInfo.systemUptime + 45
+        speaker.say("Keep the phone secured on your chest. Keep your body still. Show only your \(hand) hand, with your index finger at a comfortable reach. Hold still without stretching. Measuring in three seconds.", interrupt: true)
+    }
+
+    func closeReachSetup() {
+        stop()
+        speaker.say(reachDistance == nil
+            ? "Setup closed. Reach guidance is unavailable until measured. Tap anywhere to reopen setup."
+            : "Setup closed. Tap anywhere to say what to find.", interrupt: true)
+    }
+
+    func chooseReachHand(_ hand: String) {
+        guard !calibrating, ["left", "right"].contains(hand) else { return }
+        selectedHand = hand
+        Haptics.tap()
+        speaker.say("Using your \(hand) hand. Tap the main area to measure. With VoiceOver, double tap with two fingers.", interrupt: true)
+    }
+
+    func explainSetup() {
+        speaker.say("Secure the phone on your chest and keep your body still. Using your \(selectedHand) hand. Tap the main area to measure; with VoiceOver, double tap with two fingers. Then hold your index finger at a comfortable reach without stretching. Setup closes automatically when measured. Swipe left or right to choose that hand, or use the hand controls with VoiceOver. To exit setup, hold the screen, or use the VoiceOver escape gesture.", interrupt: true)
+    }
+
+    /// A fixed action in every phase. Invalidate all delayed model, capture and microphone results.
+    func stop() {
+        sessionID += 1
+        holdCheckID += 1
+        input.cancel()
+        tones.stop()
+        speaker.stop()
+        guide = nil
+        reachFrame = nil
+        scan = nil
+        mapPlanner = nil
+        clearHoldCollection()
+        processor.target = nil
+        processor.object = nil
+        candidates = []
+        safetyMessage = nil
+        handDistance = nil
+        calibrating = false
+        resetHoldCycle()
+        phase = .idle
+        log("stop", "explicit cancellation")
+        speaker.say("Stopped. Keep your hand still. Tap to speak a new command.", interrupt: true)
+    }
+
+    func finishRoomScan() {
+        guard phase == .mapping else { return }
+        finishMapping(early: true)
+    }
+
+    func checkHeldObject() {
+        guard targetName != nil, [.guiding, .grabbing].contains(phase), safetyMessage == nil, !holdCycleStarted else {
+            speaker.say(needsUserDecision ? "I cannot confirm it. Confirm it yourself, start a new search, or stop." : "No object check is available. Start a new search.", interrupt: true)
+            return
+        }
+        startHoldCheck()
+    }
+
+    func confirmHeldObject() {
+        guard targetName != nil, [.guiding, .grabbing, .verifying].contains(phase), safetyMessage == nil else { return }
+        holdCheckID += 1
+        clearHoldCollection()
+        needsUserDecision = false
+        finish(spoken: "You confirmed the \(targetName ?? "object").", event: "user_confirmed")
+    }
+
+    private func pauseForSafety(_ message: String) {
+        guard safetyMessage == nil else { return }
+        safetyMessage = message
+        holdCheckID += 1
+        clearHoldCollection()
+        tones.stop()
+        handDistance = nil
+        speaker.say(message, interrupt: true)
+        log("safety_pause", message)
+    }
 
     init() {
         processor.onFrame = { [weak self] f in
@@ -96,7 +225,28 @@ final class FindModel {
         session.delegate = processor
         session.delegateQueue = processor.queue
         speaker.onEvent = { [weak self] event, text in self?.log(event, text) }
-        audio.onEvent = { [weak self] event, detail in self?.log(event, detail) }
+        audio.onEvent = { [weak self] event, detail in
+            guard let self else { return }
+            log(event, detail)
+            // v5 launch: an interruption began and the first line never finished.
+            if event == "audio_interruption", detail == "ended", speaker.isSpeaking { speaker.rebuild(reason: "interruption ended") }
+        }
+        // v5 launch: 4.5 min with the first line stuck and tracking initializing. Log app state so the
+        // next log shows whether the app was in the background.
+        for (name, event) in [(UIApplication.didBecomeActiveNotification, "app_active"),
+                              (UIApplication.willResignActiveNotification, "app_inactive"),
+                              (UIApplication.didEnterBackgroundNotification, "app_background")] {
+            lifecycleObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.log(event, "")
+                    if event != "app_active" {
+                        self?.stop()
+                        self?.speaker.stop()
+                        self?.reachDistance = nil
+                    }
+                }
+            })
+        }
         audio.onReset = { [weak self] in self?.speaker.rebuild(reason: "audio reset") }
     }
 
@@ -116,9 +266,24 @@ final class FindModel {
         }
         session.run(config)
         audio.start()
+        frameWatchdog?.cancel()
+        frameWatchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled, let self else { return }
+                if calibrating, let deadline = calibrationDeadline, ProcessInfo.processInfo.systemUptime >= deadline {
+                    calibrating = false
+                    speaker.say("Measurement timed out. Check the camera and try Reach setup again.", interrupt: true)
+                }
+                if [.guiding, .grabbing, .verifying].contains(phase),
+                   ProcessInfo.processInfo.systemUptime - lastInputFrame > 0.75 {
+                    pauseForSafety("Stop your hand. Camera updates stopped. Start a new search after the camera recovers.")
+                }
+            }
+        }
         Task {
             if await SpeechInput.requestAuthorization() {
-                speaker.say("Sightline ready. Tap the screen and say what to find.")
+                explainSetup()
             } else {
                 speaker.say("Sightline needs microphone and speech permission. Please allow them in Settings.")
             }
@@ -126,43 +291,25 @@ final class FindModel {
     }
 
     func pause() {
+        stop()
+        frameWatchdog?.cancel()
+        frameWatchdog = nil
         session.pause()
         tones.stop()
         speaker.stop()
     }
 
-    /// Tap while guiding with the hand this close (or while grabbing) = "check what I'm holding".
-    static let verifyTapRadius: Float = 0.25
-    /// After an automatic "Got it", a tap within this many seconds checks the object instead of listening.
-    static let verifyAfterDone: TimeInterval = 15
 
     /// The one big button: listen when idle, check the object when the hand is at it, stop otherwise.
     /// Every tap is answered at once (haptic, then a sound or words), 2026-10-29 blindfold test.
     func tap() {
         Haptics.tap()
+        if calibrating { stop(); return }
         log("tap", phase.rawValue)
-        switch phase {
-        case .idle:
+        if phase == .idle || phase == .done {
+            guard reachDistance != nil else { explainSetup(); return }
             listen()
-        case .done:
-            if let at = doneAt, Date().timeIntervalSince(at) < Self.verifyAfterDone, targetName != nil {
-                startHoldCheck()
-            } else {
-                listen()
-            }
-        case .grabbing:
-            startHoldCheck()
-        case .guiding where (handDistance ?? .infinity) <= Self.verifyTapRadius:
-            startHoldCheck()
-        case .guiding, .locating, .searching:
-            finish(spoken: "Stopped. Tap to speak a command.", event: "stop")
-        case .mapping:
-            finishMapping(early: true)
-        case .verifying:
-            speaker.say("Still checking.")
-        case .listening:
-            break  // speaking now would be heard by the recogniser; the haptic is the answer
-        }
+        } else { stop() }
     }
 
     /// Double tap: say where we are and what to do next.
@@ -174,23 +321,14 @@ final class FindModel {
     }
 
     /// Long press: cancel everything and go back to idle.
-    func reset() {
-        Haptics.reset()
-        sessionID += 1  // every pending task sees a new session and drops its result
-        tones.stop()
-        tones.earcon(.reset)
-        processor.target = nil
-        guide = nil
-        scan = nil
-        mapPlanner = nil
-        candidates = []
-        phase = .idle
-        log("reset", "")
-        speaker.say("Reset. Tap to speak a command.", interrupt: true)
-    }
+    func reset() { stop() }
 
     func statusLine() -> String {
         let name = targetName ?? "object"
+        if calibrating { return "Measuring your comfortable reach. Keep still. Tap to stop measurement." }
+        if reachDistance == nil { return "Reach not measured. Tap the main area to open spoken setup." }
+        if let safetyMessage { return safetyMessage }
+        if needsUserDecision { return "I cannot confirm it. Confirm it yourself, start a new search, or stop." }
         switch phase {
         case .idle:
             return "Ready. Tap and say what to find." + (room.active ? " Room map is on." : "")
@@ -201,102 +339,173 @@ final class FindModel {
         case .searching:
             return "Searching for the \(name). \(scanCalls) views checked. Turn slowly. Tap to stop."
         case .guiding:
-            guard let d = handDistance else { return "Guiding you to the \(name). I can't see your hand. Reach toward it. Tap to stop." }
+            guard let d = handDistance else { return "Guiding you to the \(name). I cannot see your hand. Keep it still. Tap to stop." }
             return "Guiding you to the \(name). Your hand is about \(max(1, Int((d * 10).rounded())) * 10) centimetres away."
         case .grabbing:
-            return "Your hand is at the \(name). Grab it and lift it. Tap if you think you have it."
+            return "The \(name) is nearby. Contact is not confirmed. Explore by touch. Choose Check after picking it up, or tap the main area to stop."
         case .verifying:
             return "Checking what you are holding."
         case .done:
-            return "Done. You have the \(name). Tap to find something else."
+            return "Search finished for the \(name). Tap to find something else."
         case .mapping:
-            return "Scanning the room. \(mapViews) views, \(mapInventory.items.count) things so far. Turn slowly. Tap to finish."
+            return "Scanning the room. \(mapViews) views, \(mapInventory.items.count) things so far. Turn slowly. Use Finish scan to save, or Stop to discard."
         }
     }
 
-    // MARK: Hold check (tap -> Muse Spark yes/no on the hand region)
+    // MARK: Bounded hold evidence collection
 
-    /// The user thinks they have it: photo of the next frame, crop around the hand, Spark (minimal) yes/no.
-    private func startHoldCheck(fromSession: Bool = false) {
-        checkFromSession = fromSession
-        resumePhase = phase == .done ? .done : .grabbing
+    private func startHoldCheck(fromSession: Bool = false, reason: String? = nil) {
+        guard tracking == "normal", safetyMessage == nil, !holdCycleStarted else { return }
+        clearHoldCollection()
+        holdVerification = HoldVerification()
+        holdCaptureSerial = 0
+        holdMovementIssued = false
+        needsUserDecision = false
+        holdCycleStarted = true
+        checkFromSession = guide != nil
+        if !fromSession { guide?.beginManualCheck() }
         phase = .verifying
         tones.stop()
-        if !fromSession { speaker.say("Checking.", interrupt: true) }  // the session already said it
-        log("hold_check", fromSession ? "hand left the object" : "tap")
-        processor.requestCapture("hold_check")
-        // No photo (e.g. no depth this frame) or Spark too slow: give the button back.
-        let id = sessionID
+        holdCheckID += 1
+        let id = sessionID, check = holdCheckID
+        if !fromSession { speaker.say("Checking the object.", interrupt: true) }
+        log("hold_check", fromSession ? (reason ?? "session") : "button")
+        requestHoldObservation(session: id, check: check)
         Task {
-            try? await Task.sleep(for: .seconds(25))
-            guard id == sessionID, phase == .verifying else { return }
-            log("hold_check_result", "timeout")
-            say(SpokenLine(text: "I'm not sure. Hold it in front of the camera and tap again.", interrupt: true))
-            phase = resumePhase
+            try? await Task.sleep(for: .seconds(35))
+            guard id == sessionID, check == holdCheckID, phase == .verifying else { return }
+            completeHoldCheck(nil, reason: HoldFailure.timeout.rawValue, moved: nil)
         }
     }
 
-    private func runHoldCheck(_ s: FrameSnapshot, handVision: [HandJoint: SIMD2<Float>]) {
-        guard let noun = targetName else { return }
-        let id = sessionID
-        let crop = Self.handRegion(handVision, snapshot: s).flatMap { Self.crop(s.jpeg, to: $0, margin: 0.8) } ?? s.jpeg
+    private func requestHoldObservation(session id: Int, check: Int) {
+        guard id == sessionID, check == holdCheckID, phase == .verifying, safetyMessage == nil,
+              !holdCapturePending, !holdObservationInFlight, holdVerification.result == .collect else { return }
+        guard holdCaptureSerial < HoldVerification.maxObservations else {
+            completeHoldCheck(nil, reason: "insufficientEvidence", moved: nil)
+            return
+        }
+        holdCaptureSerial += 1
+        holdCapturePending = true
+        processor.requestCapture("hold_evidence:\(id):\(check):\(holdCaptureSerial)")
+    }
+
+    private func runHoldObservation(_ s: FrameSnapshot, hand: HandKeypoints?) {
+        guard let noun = targetName, holdCapturePending, !holdObservationInFlight else { return }
+        holdCapturePending = false
+        holdObservationInFlight = true
+        let id = sessionID, check = holdCheckID, serial = holdCaptureSerial
         let reference = referenceCrop
-        // The hand has moved away from where the object was: if SAM still sees it there, it was not taken.
-        let handAway = checkFromSession || (handDistance ?? 0) > 0.12
         let original = target
+        let support = guide?.object?.supportHeight
         Task {
-            async let spark = MuseAgent.verifyHolding(noun: noun, jpeg: crop, reference: reference, label: "hold_\(id)")
-            async let there = handAway ? stillThere(noun, at: original, snapshot: s) : nil
-            var result = (try? await spark).flatMap { $0 }
-            let stillThere = await there
-            guard id == sessionID, phase == .verifying else { return }
-            log("hold_check_result", (result.map { $0 ? "yes" : "no" } ?? "unclear")
-                + (reference == nil ? "" : " (with reference)") + " still_there \(stillThere.map { "\($0)" } ?? "not checked")")
-            if stillThere == true && result != false {
-                result = false
-                log("hold_check_override", "object still where it was found")
+            guard id == sessionID, check == holdCheckID, serial == holdCaptureSerial,
+                  phase == .verifying, safetyMessage == nil else { return }
+            guard let reference else { completeHoldCheck(nil, reason: "missing_reference", moved: nil); return }
+            guard holdSAMCalls < Self.maxHoldSAMCalls else { completeHoldCheck(nil, reason: "budget", moved: nil); return }
+            let seen = await holdCandidates(noun, snapshot: s, expectedSession: id, expectedCheck: check)
+            guard id == sessionID, check == holdCheckID, phase == .verifying, safetyMessage == nil else { return }
+            // Pick the candidate nearest the observed hand, then verify that exact candidate's identity.
+            let point = hand?.reference ?? original ?? .zero
+            let candidate = seen?.min { simd_distance($0.world, point) < simd_distance($1.world, point) }
+            var identity: Bool?
+            if let candidate, let boxed = Self.drawBox(s.jpeg, box: candidate.box) {
+                identity = try? await MuseAgent.verifyObjectIdentity(noun: noun, jpeg: boxed, reference: reference,
+                                                                    label: "hold_identity_\(id)_\(serial)")
             }
-            if checkFromSession, var session = guide {
-                checkFromSession = false
-                let lines = session.resolveCheck(result, time: lastFrameTime)
-                guide = session
-                lines.forEach(say)
-                switch session.phase {
-                case .done: finish(spoken: nil, event: "hold_yes")
-                case .grabbing: phase = .grabbing
-                default: phase = .guiding
-                }
-                return
-            }
+            guard id == sessionID, check == holdCheckID, serial == holdCaptureSerial,
+                  phase == .verifying, safetyMessage == nil else { return }
+            let near = candidate.map { HoldContact.near(hand: hand, points: $0.object?.points ?? [], centre: $0.world) } ?? false
+            // A supported object must actually rise; sliding it with a hand is not possession.
+            let away = candidate.flatMap { c in original.map { p in
+                simd_distance(c.world, p) >= 0.05 && (support == nil || c.world.y - p.y >= 0.03)
+            } } ?? false
+            let observation = HoldObservation(time: s.timestamp, object: candidate?.world, hand: hand,
+                                              identity: identity, nearHand: near, awayFromOriginal: away, surface: candidate?.object?.points ?? [])
+            let result = holdVerification.add(observation)
+            holdObservationInFlight = false
+            log("hold_evidence", "n \(holdVerification.attempts) identity \(identity.map(String.init) ?? "unknown") near \(near) away \(away) result \(result)")
             switch result {
-            case true?:
-                finish(spoken: "Yes, that's the \(noun). Well done.", event: "hold_yes")
-            case false?:
-                // Back to guiding from the hand prompt; the target stays where SAM put it.
-                Haptics.warning()
-                tones.earcon(.failure)
-                say(SpokenLine(text: "That doesn't look like the \(noun). Put it down, and I'll guide you again.", interrupt: true))
-                guide = target.map { GuidanceSession(targetName: noun, target: $0, cameraTransform: lastCamera, time: lastFrameTime) }
-                processor.target = target
-                phase = .guiding
-            case nil:
-                say(SpokenLine(text: "I'm not sure. Hold it in front of the camera and tap again.", interrupt: true))
-                phase = resumePhase
+            case .confirmed(let position): completeHoldCheck(true, reason: "identity_and_shared_motion", moved: position)
+            case .uncertain(let reason): completeHoldCheck(nil, reason: reason.rawValue, moved: nil)
+            case .collect: await collectNextHoldEvidence(source: s, session: id, check: check)
             }
         }
     }
 
-    /// One SAM call on the hold-check photo: is the object still where it was locked (within 5 cm)?
-    /// nil = could not tell (target off-screen, no answer).
-    private func stillThere(_ noun: String, at original: SIMD3<Float>?, snapshot s: FrameSnapshot) async -> Bool? {
-        guard let original else { return nil }
-        let c = DepthProjector.camera(fromWorld: original, cameraTransform: s.cameraTransform)
-        let k = s.intrinsics  // raw camera image
-        guard let p = DepthProjector.project(cameraPoint: c, intrinsics: k),
-              p.x > 0, p.y > 0, p.x < k.imageSize.x, p.y < k.imageSize.y else { return nil }
-        guard let response = try? await MetaAPI.segment(noun: noun, jpeg: s.jpeg, imageLabel: "still_\(sessionID)") else { return nil }
-        let list = Self.candidates(from: SAMParser.parse(response.text), snapshot: s)
-        return list.contains { simd_distance($0.world, original) < 0.05 }
+    private func collectNextHoldEvidence(source: FrameSnapshot, session id: Int, check: Int) async {
+        guard id == sessionID, check == holdCheckID, phase == .verifying, safetyMessage == nil else { return }
+        if !holdMovementIssued, handTrace.isSteady(at: lastFrameTime), let anchor = holdVerification.latestAnchor, let object = anchor.object,
+           let oldHand = anchor.hand, let current = handTrace.hand(at: lastFrameTime) {
+            let shifts = HandJoint.tips.compactMap { joint -> SIMD3<Float>? in
+                guard let a = oldHand.joints[joint], let b = current.joints[joint] else { return nil }
+                return b - a
+            }
+            guard shifts.count >= 2, let scene = holdScene, lastFrameTime - scene.time <= 0.4,
+                  let reachDistance else { completeHoldCheck(nil, reason: "no_clear_movement", moved: nil); return }
+            let shift = shifts.reduce(.zero, +) / Float(shifts.count)
+            let currentObject = object + shift
+            // Remove only the observed held-object surface from the self/obstacle screen.
+            let shape = anchor.surface.map { $0 + shift }
+            let obstacles = scene.map
+            let camera = lastCamera
+            let plan = HoldMovementPlan.make(object: currentObject, hand: current, camera: camera,
+                profile: ReachProfile(maximumDistance: reachDistance), obstacles: obstacles, surface: shape) { point in
+                    let p = DepthProjector.camera(fromWorld: point, cameraTransform: camera)
+                    guard let pixel = DepthProjector.project(cameraPoint: p, intrinsics: source.intrinsics) else { return false }
+                    let size = source.intrinsics.imageSize
+                    return pixel.x > size.x * 0.05 && pixel.x < size.x * 0.95 && pixel.y > size.y * 0.05 && pixel.y < size.y * 0.95
+                }
+            guard let plan else { completeHoldCheck(nil, reason: "no_clear_movement", moved: nil); return }
+            holdMovementIssued = true
+            activeHoldMovement = (HoldMovementContext(baseline: current, object: currentObject, surface: shape, delta: plan.delta), source.intrinsics)
+            speaker.say(plan.phrase, interrupt: true)
+            while speaker.isSpeaking {
+                try? await Task.sleep(for: .milliseconds(100))
+                guard id == sessionID, check == holdCheckID, phase == .verifying, safetyMessage == nil else { return }
+            }
+            guard id == sessionID, check == holdCheckID, phase == .verifying, safetyMessage == nil else { return }
+            holdMovementCapture = HoldMovementCapture(baseline: current, delta: plan.delta, started: lastFrameTime)
+            // Capture will be triggered by local movement, or once after a four-second deadline.
+            return
+        }
+        speaker.say("Keep your hand still. Taking one more look.", interrupt: true)
+        try? await Task.sleep(for: .milliseconds(400))
+        guard id == sessionID, check == holdCheckID, phase == .verifying, safetyMessage == nil else { return }
+        requestHoldObservation(session: id, check: check)
+    }
+
+    private func completeHoldCheck(_ result: Bool?, reason: String, moved: SIMD3<Float>?) {
+        clearHoldCollection()
+        if result != true { holdVerification.finish(HoldFailure(rawValue: reason) ?? .insufficientEvidence) }
+        holdCheckID += 1
+        needsUserDecision = result != true
+        if let moved { target = moved; processor.target = moved }
+        log("hold_check_result", "\(result == true ? "yes" : "unclear") (\(reason)) observations \(holdVerification.attempts) captures \(holdCaptureSerial) movement_prompt \(holdMovementIssued)")
+        if checkFromSession, var session = guide {
+            checkFromSession = false
+            session.resolveCheck(result, time: lastFrameTime).forEach(say)
+            guide = session
+        }
+        if result == true { finish(spoken: "Confirmed. You have the \(targetName ?? "object").", event: "hold_yes") }
+        else {
+            phase = .grabbing
+            speaker.say("I cannot confirm it. Keep your hand still. Confirm it yourself, start a new search, or stop.", interrupt: true)
+        }
+    }
+
+    /// One SAM call on the hold-check photo (every check since v6). nil = the call failed.
+    private func holdCandidates(_ noun: String, snapshot s: FrameSnapshot, expectedSession: Int, expectedCheck: Int) async -> [Candidate]? {
+        guard expectedSession == sessionID, expectedCheck == holdCheckID, phase == .verifying, safetyMessage == nil else { return nil }
+        guard holdSAMCalls < Self.maxHoldSAMCalls else {
+            log("hold_sam_budget", "\(holdSAMCalls) used; cannot automatically confirm")
+            return nil
+        }
+        holdSAMCalls += 1
+        guard let response = try? await MetaAPI.segment(noun: noun, jpeg: s.jpeg,
+                                                        imageLabel: "still_\(sessionID)_\(holdSAMCalls)") else { return nil }
+        guard expectedSession == sessionID, expectedCheck == holdCheckID, phase == .verifying, safetyMessage == nil else { return nil }
+        return Self.candidates(from: SAMParser.parse(response.text), snapshot: s)
     }
 
     /// Bounding box of the Vision hand joints on the uploaded image, nil without joints.
@@ -317,10 +526,13 @@ final class FindModel {
         let id = sessionID
         Task {
             try? await Task.sleep(for: .milliseconds(180))  // let the earcon end before the mic opens
+            guard id == sessionID, phase == .listening else { return }
             let heard = (try? await input.listenOnce()) ?? ""
             // The input engine may have changed the route: back to the loudspeaker before speaking.
             audio.apply()
             guard id == sessionID else { return }  // long-press reset while listening
+            tones.earcon(.heard)
+            log("heard", heard.isEmpty ? "(nothing)" + (input.lastError.map { " " + $0 } ?? "") : heard)
             lastHeard = heard
             switch CommandParser.parse(heard) {
             case .find(let noun):
@@ -331,7 +543,7 @@ final class FindModel {
                 finish(spoken: "Stopped. Tap to speak a command.", event: "stop")
             case nil where heard.isEmpty:
                 phase = .idle
-                speaker.say("I didn't hear anything. Tap and try again.")
+                speaker.say("I didn't catch that. Tap and say it again.")
             case nil:
                 startAgent(heard: heard)
             }
@@ -343,19 +555,25 @@ final class FindModel {
         targetName = name
         target = nil
         candidates = []
+        notFound = []
+        agentFinds = 0
         samCalls = 0
+        holdSAMCalls = 0
         scanCalls = 0
         scan = nil
         scanInFlight = false
         checkFromSession = false
         referenceCrop = nil
+        safetyMessage = nil
+        resetHoldCycle()
         mapPlanner = nil
         guide = nil
         guidePhase = "-"
         // A limited-tracking moment before this search must not trigger a re-lock (2026-10-28 log:
         // an extra SAM call 2 s into the search with tracking normal).
-        wasTrackingLimited = false
+        reachFrame = nil
         processor.target = nil
+        processor.object = nil
         sessionStart = Date()
         phase = .locating
     }
@@ -365,18 +583,26 @@ final class FindModel {
         log("command", noun)
         // Instant local cue (G4): the user hears something before any network call.
         speaker.say("Looking for the \(noun).")
-        Task { await lock(noun: noun) }
+        let id = sessionID
+        Task {
+            guard id == sessionID, phase == .locating else { return }
+            await lock(noun: noun)
+        }
     }
 
-    /// The local parser could not read the command ("I'm thirsty"): Muse Spark (minimal) decides.
+    /// The local parser could not read the command ("I'm thirsty", "the green key"): Muse Spark decides.
+    /// Effort medium since v6 (understanding first; v5: "only very simple language works").
     private func startAgent(heard: String) {
         beginSession(name: nil)
         log("command_agent", heard)
         speaker.say("One moment.")
+        let id = sessionID
         Task {
-            await runAgent(prompt: "The user said: \"\(heard)\". Work out which object they want, find it and select it. "
-                           + "If it is not a request to find an object, say so briefly and stop.",
-                           jpeg: nil, effort: .minimal)
+            let image = await snapshot()?.jpeg
+            guard id == sessionID, phase == .locating else { return }
+            await runAgent(prompt: "The user said: \"\(heard)\". Work out what they want and help them get it. "
+                           + "If it is not about finding an object or scanning the room, say so briefly and stop.",
+                           jpeg: image, effort: .medium)
         }
     }
 
@@ -391,6 +617,8 @@ final class FindModel {
         /// 3D shape + support plane (guidance to the nearest surface, fingertip grasp check).
         var object: ObjectModel?
         var obstacles: ObstacleMap?
+        var referenceCrop: Data?
+        var sourceJPEG: Data
     }
 
     /// Below this SAM confidence, Spark checks the crop before we trust it (the first device test
@@ -412,11 +640,13 @@ final class FindModel {
     /// Small objects (SmallObjects, e.g. keys): a 930 px photo cut into 2x2 tiles of ~512 px, one SAM
     /// call per tile in parallel (2026-10-29: the keys were 13x17 px at 512 px and SAM missed them).
     private func segment(_ noun: String, scanning: Bool = false) async -> Result<[Candidate], FindError> {
+        let id = sessionID
         guard scanning || samCalls < Self.maxSAMCalls else { return .failure(FindError("budget")) }
         let tiled = SmallObjects.isSmall(noun)
         guard let s = await snapshot(longEdge: tiled ? FrameSnapshot.tiledLongEdge : FrameSnapshot.longEdge) else {
             return .failure(FindError("no_frame"))
         }
+        guard id == sessionID else { return .failure(FindError("cancelled")) }
         if scanning { scanCalls += 1 } else { samCalls += 1 }
         lastJPEG = s.jpeg
         do {
@@ -444,10 +674,15 @@ final class FindModel {
                 samText = try await MetaAPI.segment(noun: noun, jpeg: s.jpeg, imageLabel: label).text
                 records = SAMParser.parse(samText)
             }
+            guard id == sessionID else { return .failure(FindError("cancelled")) }
             if samText.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "#tile", with: "").isEmpty {
                 log("sam_empty", tiled ? "4 tiles, nothing found" : "nothing found")
             }
-            let list = Self.candidates(from: records, snapshot: s)
+            let list = Self.candidates(from: records, snapshot: s).map { c -> Candidate in
+                var c = c
+                c.info.name = noun
+                return c
+            }
             for c in list where c.recorded.reprojectsInsideMask == false {
                 log("target_outside_mask", "id \(c.info.id)")
             }
@@ -506,7 +741,7 @@ final class FindModel {
             ObstacleMap.build(mask: mask, depth: s.depth, intrinsics: s.intrinsics, cameraTransform: t, object: $0)
         }
         return Candidate(info: info, world: object?.centre ?? world, box: box, recorded: recorded,
-                         object: object, obstacles: obstacles)
+                         object: object, obstacles: obstacles, referenceCrop: Self.crop(s.jpeg, to: box, margin: 0.3), sourceJPEG: s.jpeg)
     }
 
     private func lock(noun: String) async {
@@ -538,7 +773,8 @@ final class FindModel {
             let ok = await verify(noun: noun, candidate: list[0])
             guard id == sessionID, phase == .locating else { return }
             log("verify", "c \(list[0].info.confidence) -> \(ok.map { $0 ? "yes" : "no" } ?? "error")")
-            if ok == false { startScan(noun) } else { select(list[0]) }
+            if ok == true { select(list[0]) }
+            else { startScan(noun) }
         } else {
             select(list[0])
         }
@@ -556,12 +792,37 @@ final class FindModel {
             planner.hint = item.world
             text = RoomInventory.hint(item, noun: noun, cameraTransform: lastCamera) + " " + text
             log("room_hint", "\(item.name) \(item.source) \(item.seen)")
+        } else if let inventory = room.activeInventory, !inventory.items.isEmpty {
+            guessFromRoom(noun, inventory: inventory)
         }
         scan = planner
         scanInFlight = false
         phase = .searching
         log("scan_start", "")
         say(SpokenLine(text: text, interrupt: true))
+    }
+
+    /// The room map does not know the object (Nils, v5: "infer from nearby things, then send the user that
+    /// way"): Spark picks the mapped thing it is most likely near; the scan turns there first.
+    private func guessFromRoom(_ noun: String, inventory: RoomInventory) {
+        let id = sessionID, camera = lastCamera
+        let items = Array(inventory.items.prefix(40))
+        Task {
+            let pick = try? await MuseAgent.guessNear(noun: noun, items: inventory.describe(from: camera, now: Date()),
+                                                     label: "guess_\(id)")
+            guard id == sessionID, phase == .searching, let i = pick ?? nil, items.indices.contains(i) else {
+                log("room_guess", "none")
+                return
+            }
+            let item = items[i]
+            scan?.hint = item.world
+            scan?.hintIsGuess = true
+            let o = BodyOffset(from: SIMD3(lastCamera.columns.3.x, lastCamera.columns.3.y, lastCamera.columns.3.z),
+                               to: item.world, cameraTransform: lastCamera)
+            log("room_guess", item.name)
+            say(SpokenLine(text: "It might be near the \(item.name), \(RoomInventory.place(o)). I'll look there first.",
+                           interrupt: false))
+        }
     }
 
     private func stepScan(_ f: FindFrame) {
@@ -607,8 +868,8 @@ final class FindModel {
     private func suggestAfterGiveUp(_ noun: String) {
         let id = sessionID
         Task {
-            guard let s = await snapshot(),
-                  let guess = try? await MuseAgent.suggest(noun: noun, jpeg: s.jpeg, label: "suggest_\(id)") else {
+            guard let s = await snapshot(), id == sessionID, phase == .idle else { return }
+            guard let guess = try? await MuseAgent.suggest(noun: noun, jpeg: s.jpeg, label: "suggest_\(id)") else {
                 log("spark_suggest", "none")
                 return
             }
@@ -624,10 +885,25 @@ final class FindModel {
         return "Earlier, " + found.replacingOccurrences(of: "Found the x. It's", with: "it was")
     }
 
-    /// Muse Spark (minimal) yes/no on a crop around the SAM box. nil = could not check.
+    /// Muse Spark (minimal) yes/no on the whole photo with the SAM box drawn. nil = could not check.
+    /// v7: a crop of the ~512 px photo was ~200 px wide and showed a green book as a thin strip under a
+    /// white tube; Spark said no to both prompts. With the box on the full photo it said yes, and no for
+    /// the cup's and the tube's boxes (2026-10-30, logged as verify_box_* in api_calls.csv).
     private func verify(noun: String, candidate c: Candidate) async -> Bool? {
-        guard let jpeg = lastJPEG, let crop = Self.crop(jpeg, to: c.box, margin: 0.3) else { return nil }
-        return try? await MuseAgent.verify(noun: noun, jpeg: crop, label: "verify_\(sessionID)")
+        guard let boxed = Self.drawBox(c.sourceJPEG, box: c.box) else { return nil }
+        return try? await MuseAgent.verify(noun: noun, jpeg: boxed, label: "verify_\(sessionID)")
+    }
+
+    nonisolated static func drawBox(_ jpeg: Data, box: CGRect) -> Data? {
+        guard let image = UIImage(data: jpeg) else { return nil }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: image.size, format: format).jpegData(withCompressionQuality: 0.85) { ctx in
+            image.draw(at: .zero)
+            UIColor.green.setStroke()
+            ctx.cgContext.setLineWidth(3)
+            ctx.cgContext.stroke(box)
+        }
     }
 
     nonisolated static func crop(_ jpeg: Data, to box: CGRect, margin: CGFloat) -> Data? {
@@ -642,11 +918,13 @@ final class FindModel {
         target = c.world
         processor.target = c.world
         phase = .guiding
+        reachFrame = lastCamera
+        processor.object = c.object
         Haptics.success()
         tones.earcon(.success)
         log("target", "id \(c.info.id) c \(c.info.confidence)")
         // What the object looked like here, for the strict hold check later.
-        referenceCrop = lastJPEG.flatMap { Self.crop($0, to: c.box, margin: 0.3) }
+        referenceCrop = c.referenceCrop
         if let name = targetName {
             lastSeen[name] = c.world
             room.remember(name, at: c.world)
@@ -657,9 +935,11 @@ final class FindModel {
                    o.supportHeight.map { String(format: "%.2f", $0) } ?? "none", c.obstacles?.points.count ?? 0)
         } ?? "no model (centre only)")
         let session = GuidanceSession(targetName: targetName ?? "object", target: c.world, object: c.object,
-                                      obstacles: c.obstacles, cameraTransform: lastCamera, time: lastFrameTime)
+                                      obstacles: c.obstacles, cameraTransform: lastCamera, time: lastFrameTime,
+                                      reachProfile: ReachProfile(maximumDistance: reachDistance ?? 0))
         guide = session
         guidePhase = session.phase.rawValue
+        safetyMessage = session.pauseReason
         if let intro { say(SpokenLine(text: intro, interrupt: true)) }
         for (i, line) in session.opening.enumerated() {
             say(SpokenLine(text: line.text, interrupt: line.interrupt && i == 0 && intro == nil))
@@ -670,28 +950,6 @@ final class FindModel {
         lastCue = line.text
         log("say", line.text + (line.interrupt ? " [interrupts]" : ""), distance: handDistance)
         speaker.say(line.text, interrupt: line.interrupt)
-    }
-
-    /// Tracking recovered: re-run SAM and follow the nearest candidate if the object moved a little.
-    private func relock() {
-        guard let noun = targetName, let current = target else { return }
-        let id = sessionID
-        Task {
-            let result = await segment(noun)
-            guard id == sessionID, phase == .guiding else { return }
-            guard case .success(let list) = result,
-                  let nearest = list.min(by: { simd_distance($0.world, current) < simd_distance($1.world, current) }) else {
-                log("sam_relock_fail", "")
-                return
-            }
-            let moved = simd_distance(nearest.world, current)
-            log("sam_relock", String(format: "moved %.1f cm", moved * 100))
-            if moved < 0.3 {
-                target = nearest.world
-                processor.target = nearest.world
-                guide?.moveTarget(to: nearest.world)
-            }
-        }
     }
 
     // MARK: Muse Spark commander (tool calling)
@@ -706,7 +964,8 @@ final class FindModel {
         // State goes into the first message so Spark does not spend a turn on get_state.
         var history = MuseAgent.userMessage(AgentTools.instructions + "\n\n" + prompt
                                             + "\n\nCurrent state (same as get_state): " + agentState().json(), jpeg: jpeg)
-        for turnIndex in 0..<6 {
+        // v6 run 2: "I'm thirsty" -> two questions -> the answer hit the 6-turn limit. Nils: the agent is not limited.
+        for turnIndex in 0..<16 {
             let turn: SparkTurn
             do {
                 turn = try await MuseAgent.respond(history: history, effort: effort, label: "agent_\(id)_\(turnIndex)")
@@ -748,29 +1007,57 @@ final class FindModel {
     }
 
     private func perform(_ action: AgentAction) async -> ToolResult {
+        let id = sessionID
+        guard phase == .locating else { return .ended }
         switch action {
         case .getState:
             return .output(agentState().json())
         case .findObject(let noun):
-            targetName = noun
-            speaker.say("Looking for the \(noun).")
-            switch await segment(noun) {
-            case .success(let list):
-                candidates = list
-                return .output(agentState().json())
-            case .failure(let error):
-                // 2026-10-29: Spark called find_object five times on the same view. Not in view = scan
-                // while the user turns, as for a parsed command; the agent is done.
-                candidates = []
-                log("agent_scan", error.reason)
+            // 2026-10-29: Spark called find_object five times on the same view: a phrase that already
+            // found nothing goes straight to the scan.
+            if notFound.contains(noun) {
+                log("agent_scan", "repeat \(noun)")
+                targetName = noun
                 startScan(noun)
                 return .ended
             }
+            speaker.say("Looking for the \(noun).")
+            agentFinds += 1
+            let result = await segment(noun)
+            guard id == sessionID, phase == .locating else { return .ended }
+            switch result {
+            case .success(let list):
+                // Keep earlier finds selectable ("water bottle" and "cup" for "I'm thirsty").
+                let k = agentFinds
+                let fresh = list.map { c -> Candidate in
+                    var c = c
+                    c.info.id = "\(k)-\(c.info.id)"
+                    return c
+                }
+                candidates = Self.merged(candidates, fresh)
+                return .output(agentState().json())
+            case .failure(let error):
+                notFound.append(noun)
+                log("agent_not_found", "\(noun) \(error.reason)")
+                return .output(agentState().json())
+            }
+        case .scanFor(let noun):
+            log("agent_scan", noun)
+            targetName = noun
+            startScan(noun)
+            return .ended
+        case .mapRoom:
+            log("agent_map_room", "")
+            startMapping()
+            return .ended
         case .selectTarget(let candidateID, let sentence):
             guard let c = candidates.first(where: { $0.info.id == candidateID }) else {
                 return .output(#"{"error":"unknown candidate_id"}"#)
             }
-            select(c, intro: sentence)
+            if !c.info.name.isEmpty { targetName = c.info.name }
+            let intro = sentence.flatMap(Self.withoutDirections)
+            if let sentence, intro != sentence { log("agent_say_trimmed", "\(sentence) -> \(intro ?? "(nothing)")") }
+            select(c, intro: intro)
             return .ended
         case .say(let text):
             speaker.say(text)
@@ -778,8 +1065,14 @@ final class FindModel {
         case .askUser(let question):
             speaker.say(question, interrupt: true)
             try? await Task.sleep(for: .milliseconds(150))
-            while speaker.isSpeaking { try? await Task.sleep(for: .milliseconds(100)) }
+            while speaker.isSpeaking {
+                guard id == sessionID, phase == .locating else { return .ended }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            guard id == sessionID, phase == .locating else { return .ended }
             let answer = (try? await input.listenOnce()) ?? ""
+            guard id == sessionID, phase == .locating else { return .ended }
+            audio.apply()
             log("agent_answer", answer)
             return .output(answer.isEmpty ? "(no answer)" : answer)
         case .stop:
@@ -791,27 +1084,102 @@ final class FindModel {
     }
 
     private func agentState() -> AgentState {
-        AgentState(phase: phase.rawValue, userSaid: lastHeard, targetName: targetName,
-                   candidates: candidates.map(\.info), samCallsLeft: Self.maxSAMCalls - samCalls, tracking: tracking)
+        let rooms = room.activeInventory.map { inv in
+            inv.describe(from: lastCamera, now: Date()).split(separator: "\n").map(String.init)
+        } ?? []
+        return AgentState(phase: phase.rawValue, userSaid: lastHeard, targetName: targetName,
+                          candidates: candidates.map(\.info), samCallsLeft: Self.maxSAMCalls - samCalls, tracking: tracking,
+                          notFound: notFound, roomItems: rooms)
+    }
+
+    nonisolated static func withoutDirections(_ text: String) -> String? { AgentText.withoutDirections(text) }
+
+    /// Agent finds: a new detection within 5 cm of an earlier one is the same thing ("bottle" and
+    /// "water bottle"); keep the more confident one (Muse review 2026-10-30).
+    nonisolated static func merged(_ old: [Candidate], _ fresh: [Candidate]) -> [Candidate] {
+        var all = old
+        for c in fresh {
+            if let i = all.firstIndex(where: { simd_distance($0.world, c.world) < 0.05 }) {
+                if c.info.confidence > all[i].info.confidence { all[i] = c }
+            } else {
+                all.append(c)
+            }
+        }
+        return all
     }
 
     // MARK: Local loop (~30 Hz)
 
     private func ingest(_ f: FindFrame) {
+        lastInputFrame = ProcessInfo.processInfo.systemUptime
         tracking = f.tracking
         lastCamera = f.cameraTransform
         lastFrameTime = f.time
         palm = f.hand?.reference
         fingertips = f.hand.map { Array($0.tips.values) } ?? []
         handStatus = f.hand.map { "\($0.keypointCount)/6" } ?? (f.handFail ?? "-")
-        if f.tracking != "normal" { wasTrackingLimited = true }
+
         checkRelocalization(f)
+        if calibrating {
+            if speaker.isSpeaking { calibrationStarted = nil; return }
+            calibrationStarted = calibrationStarted ?? f.time
+            let elapsed = f.time - (calibrationStarted ?? f.time)
+            if elapsed > 15 {
+                calibrating = false
+                speaker.say("Measurement failed. Keep the phone secured and your index finger visible, then try again.", interrupt: true)
+            } else if elapsed > 3, f.tracking == "normal",
+                      let distance = calibration.update(time: f.time, fingertip: f.hand?.joints[.indexTip],
+                          camera: SIMD3(f.cameraTransform.columns.3.x, f.cameraTransform.columns.3.y, f.cameraTransform.columns.3.z)) {
+                reachDistance = distance
+                calibrating = false
+                speaker.say("Comfortable reach measured: \(Int(distance * 100)) centimetres. Keep using your \(selectedHand) hand and keep your body still. Setup complete. Tap anywhere to say what to find. With VoiceOver, double tap with two fingers.", interrupt: true)
+            }
+            return
+        }
+        if [.guiding, .grabbing, .verifying].contains(phase), f.tracking != "normal" {
+            pauseForSafety("Stop your hand. Tracking is unreliable. Start a new search after tracking recovers.")
+        }
+        if [.guiding, .grabbing, .verifying].contains(phase), let reachFrame {
+            let p = f.cameraTransform.columns.3, q = reachFrame.columns.3
+            if ReachFrame.rotationDifference(reachFrame, f.cameraTransform) > 15 * .pi / 180 || simd_distance(SIMD3(p.x, p.y, p.z), SIMD3(q.x, q.y, q.z)) > 0.06 {
+                pauseForSafety("Stop your hand. The phone or your body moved. Start a new search to confirm the object again.")
+            }
+        }
+        if [.guiding, .grabbing].contains(phase), f.obstacles == nil {
+            pauseForSafety("Stop your hand. I cannot measure the nearby path reliably. Start a new search when the depth view is clear.")
+        }
+        if safetyMessage != nil { return }
+        handTrace.append(time: f.time, hand: f.hand)
+        holdScene = f.obstacles.map { (f.time, $0) }
+        if phase == .verifying, let active = activeHoldMovement {
+            let camera = f.cameraTransform
+            let failure = active.context.failure(hand: handTrace.hand(at: f.time), camera: camera,
+                profile: ReachProfile(maximumDistance: reachDistance ?? 0), obstacles: f.obstacles) { point in
+                    let p = DepthProjector.camera(fromWorld: point, cameraTransform: camera)
+                    guard let pixel = DepthProjector.project(cameraPoint: p, intrinsics: active.intrinsics) else { return false }
+                    let size = active.intrinsics.imageSize
+                    return pixel.x > size.x * 0.05 && pixel.x < size.x * 0.95 && pixel.y > size.y * 0.05 && pixel.y < size.y * 0.95
+                }
+            if let failure {
+                log("hold_movement_veto", failure.rawValue)
+                completeHoldCheck(nil, reason: "no_clear_movement", moved: nil)
+                speaker.say("Stop your hand. I cannot continue this check. Confirm it yourself, start a new search, or stop.", interrupt: true)
+            }
+        }
+        if phase == .verifying, let movement = holdMovementCapture,
+           movement.ready(time: f.time, hand: handTrace.hand(at: f.time)) {
+            holdMovementCapture = nil
+            speaker.say("Stop your hand. Checking the evidence.", interrupt: true)
+            requestHoldObservation(session: sessionID, check: holdCheckID)
+        }
         if let capture = f.capture {
             record(kind: capture.kind, snapshot: capture.snapshot, samText: nil, candidates: [],
                    hand: RecordedHand(vision: f.handVision, world: f.hand?.joints ?? [:], depths: f.handDepths),
                    extra: ["hand_to_target_cm": handDistance.map { $0 * 100 } ?? -1,
                            "target_world": target.map { [$0.x, $0.y, $0.z] } ?? []])
-            if capture.kind == "hold_check" { runHoldCheck(capture.snapshot, handVision: f.handVision) }
+            if phase == .verifying, capture.kind == "hold_evidence:\(sessionID):\(holdCheckID):\(holdCaptureSerial)" {
+                runHoldObservation(capture.snapshot, hand: handTrace.hand(at: f.time))
+            }
         }
         if phase == .searching {
             stepScan(f)
@@ -821,18 +1189,15 @@ final class FindModel {
             stepMapping(f)
             return
         }
-        guard phase == .guiding || phase == .grabbing, var session = guide else {
+        guard !needsUserDecision, phase == .guiding || phase == .grabbing, var session = guide else {
             handDistance = nil
             return
         }
-        // Re-lock once tracking recovers (PRD: re-check when tracking confidence drops).
-        if phase == .guiding && wasTrackingLimited && f.tracking == "normal" {
-            wasTrackingLimited = false
-            relock()
-        }
         let out = session.update(time: f.time, hand: f.hand, cameraTransform: f.cameraTransform,
-                                 targetDepthDelta: f.targetDepthDelta, speaking: speaker.isSpeaking)
+                                 targetDepthDelta: f.targetDepthDelta, speaking: speaker.isSpeaking,
+                                 trackingNormal: f.tracking == "normal", liveObstacles: f.obstacles)
         guide = session
+        if let reason = session.pauseReason { pauseForSafety(reason); return }
         guidePhase = out.phase.rawValue
         handDistance = out.handDistance
         tones.update(distance: out.toneDistance)
@@ -840,10 +1205,10 @@ final class FindModel {
             say(line)
             // Snapshot the hand at the moments that tell us most about the hand-point bias.
             if line.text == "I see your hand." { processor.requestCapture("hand_seen") }
-            if line.text.hasPrefix("Stop. It's at your hand") { processor.requestCapture("grab") }
+            if line.text.hasPrefix("Stop. The ") { processor.requestCapture("grab") }
         }
         if out.requestCheck {
-            startHoldCheck(fromSession: true)
+            startHoldCheck(fromSession: true, reason: out.checkReason)
             return
         }
         switch out.phase {
@@ -900,7 +1265,7 @@ final class FindModel {
         case .wait:
             break
         case .prompt:
-            say(SpokenLine(text: planner.directionPrompt(cameraTransform: f.cameraTransform), interrupt: false))
+            say(SpokenLine(text: planner.mappingPrompt(cameraTransform: f.cameraTransform), interrupt: false))
         case .giveUp:
             if mapInFlight == 0 { finishMapping(early: false) }
         case .scan:
@@ -910,8 +1275,8 @@ final class FindModel {
             let id = sessionID, view = mapViews
             Task {
                 defer { if id == sessionID { mapInFlight -= 1 } }
-                guard let s = await snapshot(),
-                      let reply = try? await MuseAgent.listObjects(jpeg: s.jpeg, label: "room_\(id)_\(view)") else {
+                guard let s = await snapshot(), id == sessionID, phase == .mapping else { return }
+                guard let reply = try? await MuseAgent.listObjects(jpeg: s.jpeg, label: "room_\(id)_\(view)") else {
                     log("map_view_fail", "\(view)")
                     return
                 }
@@ -956,7 +1321,7 @@ final class FindModel {
                 }
                 do {
                     try self.room.save(map: map, inventory: inventory)
-                    let names = Array(Set(inventory.items.map(\.name))).sorted().prefix(4)
+                    let names = Self.summaryNames(inventory)
                     self.log("map_saved", "\(inventory.items.count) items, \(map.anchors.count) anchors")
                     Haptics.success()
                     self.tones.earcon(.success)
@@ -969,6 +1334,8 @@ final class FindModel {
             }
         }
     }
+
+    nonisolated static func summaryNames(_ inventory: RoomInventory) -> [String] { inventory.summaryNames() }
 
     private func record(kind: String, snapshot: FrameSnapshot, samText: String?, candidates: [RecordedCandidate],
                         hand: RecordedHand?, extra: [String: Any] = [:]) {
@@ -995,18 +1362,22 @@ final class FindModel {
     private func finish(spoken: String?, event: String) {
         tones.stop()
         processor.target = nil
-        if ["pickup", "hold_yes"].contains(event) {
+        processor.object = nil
+        if ["pickup", "hold_yes", "user_confirmed"].contains(event) {
             Haptics.success()
             tones.earcon(.success)
-            if let name = targetName, let target { room.remember(name, at: target) }
+            // It is in the user's hand now: not at the spot where it was found (v5: stale hints).
+            if let name = targetName {
+                room.carried(name, from: target)
+                lastSeen[name] = nil
+            }
         } else {
             Haptics.warning()
             tones.earcon(.failure)
         }
         if let spoken { speaker.say(spoken, interrupt: true) }
         log(event, spoken ?? "", distance: handDistance)
-        phase = ["pickup", "done_tap", "hold_yes"].contains(event) ? .done : .idle
-        doneAt = event == "pickup" ? Date() : nil
+        phase = ["pickup", "done_tap", "hold_yes", "user_confirmed"].contains(event) ? .done : .idle
     }
 
     // MARK: Log
@@ -1045,6 +1416,7 @@ nonisolated struct FindFrame: Sendable {
     /// LiDAR depth at the target's pixel minus the target's own depth; > 0 = something farther
     /// is visible there now (object lifted away). nil when the target is off-screen or unreadable.
     var targetDepthDelta: Float?
+    var obstacles: ObstacleMap?
 }
 
 /// Runs the six-point hand pipeline on every second frame (≤ 30 Hz) off the main thread; drops frames
@@ -1062,6 +1434,11 @@ nonisolated final class FindFrameProcessor: NSObject, ARSessionDelegate, @unchec
     var target: SIMD3<Float>? {
         get { lock.withLock { _target } }
         set { lock.withLock { _target = newValue } }
+    }
+    private var _object: ObjectModel?
+    var object: ObjectModel? {
+        get { lock.withLock { _object } }
+        set { lock.withLock { _object = newValue } }
     }
     private var _capture: String?
 
@@ -1081,8 +1458,38 @@ nonisolated final class FindFrameProcessor: NSObject, ARSessionDelegate, @unchec
             onFrame?(FindFrame(time: frame.timestamp, tracking: tracking, cameraTransform: frame.camera.transform,
                                hand: r.keypoints, handVision: r.vision, handDepths: r.depths, handFail: r.failReason,
                                capture: capture,
-                               targetDepthDelta: target.flatMap { depthDelta(at: $0, frame: frame) }))
+                               targetDepthDelta: target.flatMap { depthDelta(at: $0, frame: frame) },
+                               obstacles: object.flatMap { liveObstacles(frame: frame, object: $0, hand: r.keypoints) }))
         }
+    }
+
+    /// Current-frame conservative point cloud. Hand/target returns are excluded; occluded or
+    /// transparent obstacles remain unknown, so this cannot certify a collision-free route.
+    private func liveObstacles(frame: ARFrame, object: ObjectModel, hand: HandKeypoints?) -> ObstacleMap? {
+        guard let data = frame.sceneDepth, let depth = DepthImageReader.read(data) else { return nil }
+        let k = CameraIntrinsics(matrix: frame.camera.intrinsics,
+            imageSize: SIMD2(Float(frame.camera.imageResolution.width), Float(frame.camera.imageResolution.height)))
+            .scaled(to: SIMD2(Float(depth.width), Float(depth.height)))
+        let origin = frame.camera.transform.columns.3
+        let joints = hand.map { HandEnvelope.centres(hand: $0, camera: SIMD3(origin.x, origin.y, origin.z)) } ?? []
+        var points: [SIMD3<Float>] = []
+        var usable = 0
+        var total = 0
+        for y in stride(from: 0, to: depth.height, by: 4) {
+            for x in stride(from: 0, to: depth.width, by: 4) {
+                total += 1
+                let i = y * depth.width + x, d = depth.depth[i]
+                guard d.isFinite, d > 0.1, d < 1.5, (depth.confidence?[i] ?? 0) >= 2 else { continue }
+                usable += 1
+                let p = DepthProjector.world(fromCamera: DepthProjector.unproject(pixel: SIMD2(Float(x), Float(y)), depth: d, intrinsics: k), cameraTransform: frame.camera.transform)
+                if let support = object.supportHeight, p.y <= support + 0.025 { continue }
+                guard object.distanceToSurface(p) > 0.04,
+                      !joints.contains(where: { simd_distance($0, p) < 0.065 }) else { continue }
+                points.append(p)
+            }
+        }
+        guard SceneCoverage.isUsable(valid: usable, sampled: total) else { return nil }
+        return ObstacleMap(points: points)
     }
 
     /// Median LiDAR depth (medium+ confidence) in a 5x5 window at the target's pixel, minus the target's depth.

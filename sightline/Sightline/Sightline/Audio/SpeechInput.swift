@@ -12,6 +12,8 @@ final class SpeechInput {
     private let engine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
+    private var transcript: TranscriptBox?
+    private var tapInstalled = false
 
     static func requestAuthorization() async -> Bool {
         let speech = await withCheckedContinuation { c in
@@ -36,17 +38,22 @@ final class SpeechInput {
         let format = input.outputFormat(forBus: 0)
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }
+        tapInstalled = true
         engine.prepare()
         try engine.start()
         defer { finish() }
 
-        return await withCheckedContinuation { continuation in
+        lastError = nil
+        var boxRef: TranscriptBox?
+        let heard = await withCheckedContinuation { continuation in
             let box = TranscriptBox(continuation)
+            boxRef = box
+            transcript = box
             task = recognizer.recognitionTask(with: request) { result, error in
                 if let result {
                     box.update(result.bestTranscription.formattedString, final: result.isFinal)
-                } else if error != nil {
-                    box.finish()
+                } else if let error {
+                    box.fail(error.localizedDescription)
                 }
             }
             Task {
@@ -54,15 +61,27 @@ final class SpeechInput {
                 let start = Date()
                 while !box.done {
                     try? await Task.sleep(for: .milliseconds(200))
-                    if Date().timeIntervalSince(start) > 6 || box.silentFor > 1.2 { box.finish() }
+                    // v5 test: "the green key" was never transcribed within 6 s; allow a slower start.
+                    if Date().timeIntervalSince(start) > 8 || box.silentFor > 1.5 { box.finish() }
                 }
             }
         }
+        lastError = boxRef?.error
+        return heard
+    }
+
+    /// Why the last listen returned nothing, if the recogniser said (for the find log).
+    private(set) var lastError: String?
+
+    func cancel() {
+        transcript?.finish()
+        transcript = nil
+        finish()
     }
 
     private func finish() {
         engine.stop()
-        engine.inputNode.removeTap(onBus: 0)
+        if tapInstalled { engine.inputNode.removeTap(onBus: 0); tapInstalled = false }
         request?.endAudio()
         task?.cancel()
         request = nil
@@ -88,6 +107,17 @@ private nonisolated final class TranscriptBox: @unchecked Sendable {
             if newText != text { text = newText; lastChange = Date() }
         }
         if final { finish() }
+    }
+
+    private(set) var error: String? {
+        get { lock.withLock { _error } }
+        set { lock.withLock { _error = newValue } }
+    }
+    private var _error: String?
+
+    func fail(_ message: String) {
+        error = message
+        finish()
     }
 
     func finish() {

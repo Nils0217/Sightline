@@ -57,18 +57,58 @@ public struct RoomInventory: Codable, Sendable, Equatable {
         }
     }
 
-    /// "Your keys were last seen to your right, about 1 metre away."
+    /// The things a user is likely to ask for first (v5: the summary read "backpack, bag, basket, beige cloth").
+    public func summaryNames() -> [String] {
+        let useful = ["key", "phone", "wallet", "glasses", "remote", "bottle", "cup", "mug", "book", "laptop", "headphone",
+                      "charger", "bag", "backpack", "toothbrush", "medicine", "watch", "earbud"]
+        let names = Array(Set(items.map(\.name)))
+        // Whole words: "garbage" is not a "bag" (Muse review 2026-10-30); "keys" counts as "key".
+        func rank(_ n: String) -> Int {
+            let words = Self.words(n)
+            return useful.firstIndex { words.contains($0) } ?? useful.count
+        }
+        return Array(names.sorted { (rank($0), $0) < (rank($1), $1) }.prefix(5))
+    }
+
+    /// The user picked the object up (v5 test: the hint then pointed at the empty spot where the keys had
+    /// been lifted). It is with the user now: forget where it was, both found and room-scan entries.
+    public mutating func carried(_ name: String, from p: SIMD3<Float>?) {
+        let key = Self.words(name)
+        items.removeAll { item in
+            Self.words(item.name) == key && (item.source == "found" || p.map { simd_distance(item.world, $0) < 0.5 } ?? false)
+        }
+    }
+
+    /// "Your keys were last seen a quarter turn to your right, about 1 metre away."
     public static func hint(_ item: RoomItem, noun: String, cameraTransform t: simd_float4x4) -> String {
         let camera = SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z)
         let o = BodyOffset(from: camera, to: item.world, cameraTransform: t)
         let dist = (o.right * o.right + o.forward * o.forward).squareRoot()
-        let place: String
-        if o.forward < -0.2 { place = o.right >= 0 ? "behind you, on your right" : "behind you, on your left" }
-        else if abs(o.right) < 0.15 { place = "ahead of you" }
-        else { place = o.right > 0 ? "to your right" : "to your left" }
+        let place = Self.place(o)
         let howFar = dist < 1 ? "about \(max(1, Int((dist * 10).rounded())) * 10) centimetres" : String(format: "about %.0f metre%@", dist.rounded(), dist.rounded() == 1 ? "" : "s")
         let verb = noun.hasSuffix("s") && !noun.hasSuffix("ss") ? "were" : "was"
         return "Your \(noun) \(verb) last seen \(place), \(howFar) away."
+    }
+
+    /// Where an offset is, with how far to turn: "ahead of you", "a quarter turn to your left",
+    /// "behind you, half a turn to your right".
+    public static func place(_ o: BodyOffset) -> String {
+        let yaw = atan2(o.right, o.forward)  // + = right
+        let deg = abs(yaw) * 180 / .pi
+        let side = yaw > 0 ? "right" : "left"
+        if deg < 20 { return "ahead of you" }
+        if deg < TurnSize.littleBelow { return "ahead, a little to your \(side)" }
+        if deg < TurnSize.quarterBelow { return "a quarter turn to your \(side)" }
+        return "behind you, half a turn to your \(side)"
+    }
+
+    /// Items as Spark sees them for a guess: number, name, metres right / forward / up of the user.
+    public func describe(from t: simd_float4x4, now: Date, limit: Int = 40) -> String {
+        let camera = SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z)
+        return items.prefix(limit).enumerated().map { i, item in
+            let o = BodyOffset(from: camera, to: item.world, cameraTransform: t)
+            return String(format: "%d. %@: %.1f m right, %.1f m forward, %.1f m up", i, item.name, o.right, o.forward, o.up)
+        }.joined(separator: "\n")
     }
 
     /// Objects from a Muse Spark room-scan reply: `{"objects":[{"name":"keys","x":0.4,"y":0.6}]}`
@@ -149,4 +189,13 @@ public enum SmallObjects {
         let parts = text.components(separatedBy: separator)
         return zip(parts, origins).flatMap { part, o in SAMParser.parse(part).map { $0.placed(atTileOrigin: o, fullSize: fullSize) } }
     }
+}
+
+/// Turn sizes in spoken directions (degrees from straight ahead), shared by RoomInventory.place and
+/// ScanPlanner.turn so both say the same thing for the same angle.
+public enum TurnSize {
+    /// Below this: "a little".
+    public static let littleBelow: Float = 50
+    /// Below this: "a quarter turn"; above: "half a turn".
+    public static let quarterBelow: Float = 125
 }

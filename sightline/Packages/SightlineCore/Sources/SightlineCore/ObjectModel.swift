@@ -106,7 +106,9 @@ public struct ObjectModel: Sendable {
         if let med = Stats.median(dists) { lidar = lidar.filter { abs(simd_distance($0, origin) - med) <= 0.08 } }
         guard lidar.count >= 8 else { return nil }
 
-        let support = supportHeight(objectYs: lidar.map(\.y), ring: ring)
+        // A key in a door lock or a switch on a wall (v5 test, 2026-10-29): the surface around it is
+        // vertical, so there is no table under it. Treat it as solid: no "down", goal = nearest surface.
+        let support = isVertical(ring) ? nil : supportHeight(objectYs: lidar.map(\.y), ring: ring)
         if let support {
             lidar = lidar.filter { $0.y >= support - 0.02 }  // nothing of the object is inside the table
             // Median, not the top: glossy surfaces scatter several cm either way (2026-10-28 phone: 6 cm).
@@ -124,6 +126,16 @@ public struct ObjectModel: Sendable {
         }
         guard !lidar.isEmpty else { return nil }
         return ObjectModel(points: thin(lidar), supportHeight: support, isFlat: false)
+    }
+
+    /// The ring of LiDAR points around the mask is a wall, door or cabinet front rather than a table:
+    /// it spreads up and down about as much as sideways (a table ring is within ~1 cm in height).
+    static func isVertical(_ ring: [SIMD3<Float>]) -> Bool {
+        guard ring.count >= 10 else { return false }
+        func iqr(_ v: [Float]) -> Float { (Stats.percentile(v, 0.75) ?? 0) - (Stats.percentile(v, 0.25) ?? 0) }
+        let y = iqr(ring.map(\.y))
+        let h = max(iqr(ring.map(\.x)), iqr(ring.map(\.z)))
+        return y > 0.03 && y > 0.6 * h
     }
 
     /// Median height of ring points level with the object's bottom (the table, not the wall behind).
@@ -149,18 +161,33 @@ public struct GraspAssessment: Sendable, Equatable {
     public var opposed: Bool
     /// Palm centre to the nearest surface point (m).
     public var palmToSurface: Float?
-    /// Flat objects only: the palm is above the object's footprint (not beside its edge).
-    /// Always true for solid objects, which are gripped from the side.
+    /// Flat objects only: the palm is above the object's footprint. Logged, no longer part of `touching`.
     public var palmOver: Bool = true
-    /// At least two fingertips on it, or one plus the palm within 7 cm (the 2026-10-28 phone grab:
-    /// only the thumb had depth, palm 6.1 cm from the surface; the other tips were on the glossy screen).
-    /// Flat objects also need `palmOver` (2026-10-29 test: the hand stopped beside the book's corner and
-    /// grabbed the USB hub next to it).
-    public var touching: Bool {
-        palmOver && (tipsNear >= 2 || (tipsNear >= 1 && (palmToSurface ?? .infinity) <= 0.07))
-    }
+    /// A fingertip on the surface (Nils, 2026-10-29 v5 test: judge contact with the fingertips, not the
+    /// palm; the longest finger is ~11 cm from the palm centre, so palm distances miss real grasps).
+    /// Before v6: palm over the footprint and two tips, or one tip plus the palm within 7 cm.
+    public var touching: Bool { tipsNear >= 1 }
 
     public static let touchDistance: Float = 0.03
+
+    /// Provisional geometric hold candidate. This alone never confirms possession.
+    /// Nils, 2026-10-29: being next to the hand is not enough. Held = the thumb tip and at least one
+    /// other fingertip on it (pinch / grip), or it rests on the palm (above the palm centre).
+    public static func holds(_ hand: HandKeypoints, points: [SIMD3<Float>], centre: SIMD3<Float>) -> Bool {
+        let surface = points.isEmpty ? [centre] : points
+        func onIt(_ p: SIMD3<Float>) -> Bool {
+            surface.contains { simd_distance($0, p) <= touchDistance + 0.01 }
+        }
+        if let thumb = hand.joints[.thumbTip], onIt(thumb),
+           hand.tips.contains(where: { $0.key != .thumbTip && onIt($0.value) }) { return true }
+        if let palm = hand.palmCentre {
+            let d = centre - palm
+            let across = SIMD2(d.x, d.z)
+            // On the open palm: centre within 6 cm sideways and 0–10 cm above it.
+            if simd_length(across) <= 0.035 && d.y >= -0.01 && d.y <= 0.035 { return true }
+        }
+        return false
+    }
     /// Palm-over-footprint test for flat objects: horizontal distance to the nearest object point.
     public static let overMargin: Float = 0.03
 
@@ -232,18 +259,38 @@ public struct ObstacleMap: Sendable {
         return ObstacleMap(points: Array(kept.values))
     }
 
-    /// An obstacle point within `clearance` of the straight path from the hand to `goal`
-    /// (excluding the last few cm at the goal), nearest to the hand first.
-    public func blocking(from hand: SIMD3<Float>, to goal: SIMD3<Float>, clearance: Float = 0.06) -> SIMD3<Float>? {
+    /// Obstacle within a capsule around the segment, including both endpoint caps.
+    public func blocking(from hand: SIMD3<Float>, to goal: SIMD3<Float>, clearance: Float = 0.08) -> SIMD3<Float>? {
         let seg = goal - hand
         let len2 = simd_length_squared(seg)
-        guard len2 > 1e-4 else { return nil }
+        guard len2 > 1e-8 else { return points.first { simd_distance(hand, $0) <= clearance } }
         var best: (Float, SIMD3<Float>)?
         for p in points {
-            let s = simd_dot(p - hand, seg) / len2
-            guard s > 0.05, s < 0.85 else { continue }
+            let s = min(1, max(0, simd_dot(p - hand, seg) / len2))
             if simd_distance(hand + seg * s, p) <= clearance, s < (best?.0 ?? .infinity) { best = (s, p) }
         }
         return best?.1
+    }
+}
+
+/// The hold check's verdict from its two layers (app and simulator share it). v6, 2026-10-29.
+public enum HoldDecision {
+    public enum Reason: String, Sendable { case held, stillAtSpot = "still_at_spot", goneFromSpot = "gone_from_spot", sparkOnly = "spark_only" }
+
+    /// - Parameters:
+    ///   - held: provisional geometric candidate, not proof of a grip.
+    ///   - atSpot: SAM sees it at its spot (nil = cannot tell: off-screen, covered by the hand, no answer).
+    ///   - spark: Spark's yes/no on the hand crop (nil = unclear).
+    /// - Returns: true only with shared temporal motion and affirmative identity evidence.
+    /// Missing or conflicting evidence stays uncertain; a model alone cannot confirm.
+    public static func decide(held: Bool, atSpot: Bool?, spark: Bool?, motionVerified: Bool = false) -> (result: Bool?, reason: Reason) {
+        if held { return (motionVerified && spark == true ? true : nil, .held) }
+        switch atSpot {
+        // v7: SAM saw a key at the spot (another one of the bunch) while Spark saw the key in the hand:
+        // the layers disagree, so "not sure, hold it up" instead of "put it down".
+        case true?: return (spark == true ? nil : false, .stillAtSpot)
+        case false?: return (nil, .goneFromSpot)
+        case nil: return (nil, .sparkOnly)
+        }
     }
 }

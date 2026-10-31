@@ -6,6 +6,9 @@ import Testing
 @Suite struct AgentTests {
     @Test func parsesActions() {
         #expect(AgentAction.parse(name: "find_object", arguments: #"{"noun":" Water Bottle "}"#) == .findObject("water bottle"))
+        #expect(AgentAction.parse(name: "find_object", arguments: #"{"noun":"key with an orange tag"}"#) == .findObject("key with an orange tag"))
+        #expect(AgentAction.parse(name: "scan_for", arguments: #"{"noun":"green key"}"#) == .scanFor("green key"))
+        #expect(AgentAction.parse(name: "map_room", arguments: "{}") == .mapRoom)
         #expect(AgentAction.parse(name: "select_target", arguments: #"{"candidate_id":"1"}"#) == .selectTarget("1", say: nil))
         #expect(AgentAction.parse(name: "select_target", arguments: #"{"candidate_id":"0","say":"Left cup."}"#) == .selectTarget("0", say: "Left cup."))
         #expect(AgentAction.parse(name: "say", arguments: #"{"text":"Two cups. Checking."}"#) == .say("Two cups. Checking."))
@@ -27,7 +30,7 @@ import Testing
                                widthFraction: 0.1234, heightFraction: 0.2)
         let s = AgentState(phase: "choosing", userSaid: "find the cup", targetName: "cup", candidates: [c],
                            samCallsLeft: 4, tracking: "normal")
-        #expect(s.json() == #"{"candidates":[{"confidence":0.87,"forward_cm":46,"height_fraction":0.2,"id":"1","right_cm":-12,"up_cm":-30,"width_fraction":0.12}],"phase":"choosing","sam_calls_left":4,"target_name":"cup","tracking":"normal","user_said":"find the cup"}"#)
+        #expect(s.json() == #"{"candidates":[{"confidence":0.87,"forward_cm":46,"height_fraction":0.2,"id":"1","name":"","right_cm":-12,"up_cm":-30,"width_fraction":0.12}],"not_found":[],"phase":"choosing","room_items":[],"sam_calls_left":4,"target_name":"cup","tracking":"normal","user_said":"find the cup"}"#)
     }
 
     @Test func ambiguity() {
@@ -41,6 +44,6 @@ import Testing
     @Test func toolDefinitionsAreValidJSON() throws {
         let data = try JSONSerialization.data(withJSONObject: AgentTools.definitions)
         #expect(data.count > 100)
-        #expect(AgentTools.definitions.map { $0["name"] as? String } == ["get_state", "find_object", "select_target", "say", "ask_user", "stop"])
+        #expect(AgentTools.definitions.map { $0["name"] as? String } == ["get_state", "find_object", "select_target", "say", "ask_user", "scan_for", "map_room", "stop"])
     }
 }

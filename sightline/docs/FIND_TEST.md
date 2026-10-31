@@ -1,56 +1,80 @@
 <!-- labels: important, testing, needs-review -->
-# Find and grab: v5 device test
+# 人因修訂版：實機與使用者驗證
 
-v5 fixes the 2026-10-28 v4 test (`logs/9d77d1e`). Every issue, its root cause and its fix are in **`docs/TEST_LOG.md` T5**. What changed for the tester:
+更新：2026-10-30。本文件取代舊版 v6 操作步驟。歷史結果仍在 TEST_LOG / SPIKE；目前尚未進行此版本的實機或視障使用者測試。
 
-- **Controls without sight.** Each tap gets a click you feel and a sound or words right away.
-  - **Tap** = act: speak a command, stop, or check what you hold.
-  - **Double tap** = "where are we": the status and what to do next.
-  - **Hold 1 s** = reset to the start.
-  - Sounds: rising two notes = the microphone is on; bright three notes = found / got it; falling two notes = not found / stopped / not that object; two low notes = reset.
-  - With VoiceOver: double tap = act, two-finger double tap = act, swipe up/down for "Status" and "Reset".
-  - A single tap now takes about 0.3 s to register, because the app waits to make sure it is not a double tap.
-- **Speech should no longer drop out.** Every spoken line is logged (`speech_start` / `speech_finish` / `speech_cancel`). A line that is stuck gets re-said (`speech_stuck`). Audio problems are logged as `audio_route` / `audio_interruption` / `audio_reset`.
-- **Small things (keys, rings, earbuds, pens, cards, remote, glasses …)** are searched in four tiles of a sharper photo. Each view costs 4 SAM calls instead of 1.
-- **Stricter "do I have it?"** For flat objects, "Grab it" only comes when your palm is over the object. The Spark check compares your hand with a photo of the object taken when it was found, and asks whether you are gripping it (touching is not enough). If your hand moved away and the object is still where it was, the answer is no.
-- **Scan says where to turn**: "Turn right slowly. I haven't looked there yet." → later "Point the phone lower, toward the floor, and turn slowly." When it gives up, it also says where the object was last seen, then "A guess: …" from Spark.
-- **If it finds the object at the edge of the view**: "Turn a little to your left, to face it." comes before the hand prompt.
-- **Room map.** Say **"scan the room"** and turn slowly in a full circle; tap when done. It says "Room saved. I remember 9 things, including …". Afterwards, searches start with "Your keys were last seen to your right, about 1 metre away." when the object is not in view. This works after relaunching the app if ARKit recognises the room within 8 s.
-- The log no longer says `api_error` when SAM simply finds nothing. That is now `sam_empty`.
+## 準備與操作
 
-Simulator: run `swift run --package-path Packages/SightlineCore SightlineSim`. All 12 scenarios scored 20/20 on 2026-10-29. `... SightlineSim replay logs/9d77d1e/20261028_194507` replays the recorded book, phone and keys searches with the new rules.
+使用有 LiDAR 的相容 iPhone，固定胸前。在清楚、穩定且有人可協助觀察的桌面情境驗證。先以無尖銳或高溫風險的日常測試物件測試。這是待驗證原型，不測試行走導航。
 
-## What gets saved (read this first)
-Everything is in the app's Documents folder. Nothing is deleted.
+1. 開啟 App 即聽取設定說明，預設右手；VoiceOver 可選左右手，未開 VoiceOver 時可在設定大區域左右滑切換，切換後語音回報。
+2. 點設定大區域開始量測；VoiceOver 可用雙指點兩下。三秒內將食指放在不需前傾或伸展的舒適位置，保持穩定至語音回報。只展示一隻手。再次啟動同一控制停止量測。
+3. 量測成功自動離開設定，無需找完成按鈕。閒置時點主要區域或 VoiceOver 雙指點兩下，說出要找的物件。設定隨時可長按退出或用 VoiceOver 退出手勢；未量測前引導仍不可用，再點主要區域重開設定。
+4. 引導期間保持身體不動。接近後以自己的方式觸覺探索；系統沒有確認實際接觸。
+5. 拿起後選 Check。若自然移動仍不足且手已穩定，最多要求一次四公分水平移動。依本機位移觸發下一影格；沒有動作四秒後只補看一次，不繼續向上抬。
+6. 三次觀測／三十五秒仍不確定時，Check 停用；選 New search、Stop，或在自己確知物件時按 I confirm I have it。
+7. 任務期間主要區域、固定 Stop、長按與 VoiceOver Stop 動作都停止；Status 隨時報狀態。
+8. 房間掃描使用 Finish scan and save 儲存；Stop 放棄本次掃描。
+9. 重新佩戴、手機移動或 App 離開前景後重新量測。背景返回會先呈現設定。
 
-| File | How it grows |
+## 必跑案例
+
+| 案例 | 期望結果 |
 |---|---|
-| `find_log_<time>.csv` | **One file per app launch**, rewritten after every event. It always holds every search of that launch (cumulative). v5 adds many speech rows: about 3 per spoken line. |
-| `diagnostics/<launch time>/` | **One folder per app launch.** Each event adds new files `NN_<kind>_…`, about 0.3 MB per event. New kind: `room` (one per room-scan view, up to 12). Tiled searches record the full photo once, with the four SAM outputs in `sam.txt` separated by `#tile`. |
-| `api_calls.csv` | One file for all launches, appended forever. Included in Export. |
-| `room_map/world.arworldmap` + `room_map/inventory.json` | **Overwritten** by each "scan the room". `inventory.json` is also rewritten after every successful find while the map is active. Export includes `inventory.json`; the world map stays on the phone (a few MB). |
+| 食指不可見、手或手機不穩 | 不產生成功量測；語音提示結束後量測十五秒內回報失敗；完全無影格時牆鐘四十五秒內回報逾時，可重新量測 |
+| 目標在界線之外／身後 | 無移動指令，說明伸手範圍問題 |
+| 目標在相機側邊二十度之外 | 先保持手放下，明說轉動身體、重新搜尋；不直接側伸或沿舊基準繼續 |
+| 目標可及但抬高路點越界 | 停止，不為避障而要求超界動作 |
+| 桌面手、前方物件 | 先抬高，再橫移，再下降；不持續要求往桌面下方移動 |
+| 書、手機、瓶子、杯子 | 接近近側，提供適合的觸覺探索描述；不聲稱已辨識杯柄或已接觸 |
+| 指尖路徑出現障礙 | 立即插播 Stop，不再接原本方向指令，重新搜尋才可繼續 |
+| 只有手腕／前臂路徑被擋 | 同樣中止；記錄近似模型的漏檢和誤停 |
+| 動態加入可見障礙 | 當前影格點雲否決動作；記錄從出現到停手語音的延遲 |
+| 食指間歇遮擋、其他指尖仍可見 | 短暫缺失不反覆換點或清除靜止計時；持續缺失才切換可見實際指尖 |
+| 遮住相機／手消失 | 無持續方向指令；說明不確定原因並提供 Check 或恢復方式 |
+| tracking 失效、相機移動、影格停止 | 停手、靜音；恢復後不自動使用舊路徑 |
+| 手靠近但未接觸／物件懸在掌心上方 | 不自動報已拿到；近距離只觸發探索 |
+| 參考裁圖缺失或候選來自較早影格 | 缺少參考時保留無法確認；較早候選只使用自己的來源影格，不與最新照片錯配 |
+| 拿錯旁邊物件或同類物件 | 不能因原位變空或模型單次肯定而成功；記錄身份誤判 |
+| 最多三次觀測中，兩次共同位移與身份肯定 | 才允許自動確認；綠點更新，原位置記憶移除 |
+| 物件固定、只有手移動 | 無法確認；不自動成功 |
+| 網路失敗、SAM 預算耗盡、模型分歧、35 秒超時 | 保留無法確認；不降級為 Spark 單獨成功，不恢復舊位置引導 |
+| Check 否定／不確定後手仍持物 | 不再自動檢查或要求移動，Check 停用；提供自行確認、New search 與 Stop |
+| 使用者自行確認 | 日誌為 user_confirmed；不冒充模型驗證 |
+| 聆聽／搜尋／掃描／引導／確認期間 Stop | 即時回饋，麥克風與舊結果失效；延遲結果不得重啟任務 |
+| 背景、返回、設定重測 | 停止任務，重新量測，舊結果不得生效 |
+| VoiceOver 開／關 | 可完成設定、開始、停止、狀態、Check、自行確認與掃描儲存 |
 
-New log events in v5:
-- Controls: `tap`, `status`, `reset`.
-- Speech and audio: `speech_start`, `speech_finish`, `speech_cancel`, `speech_stuck`, `audio_route`, `audio_interruption`, `audio_reset`.
-- Search: `sam_empty`, `api_error` (real errors only, with the message), `agent_scan`, `spark_suggest`.
-- Hold check: `hold_check_override`; the `hold_check_result` detail now includes `still_there`.
-- Room map: `room_hint`, `room_map_load`, `room_map_relocalized`, `room_map_fallback`, `map_start`, `map_view`, `map_view_fail`, `map_finish`, `map_saved`, `map_save_fail`.
+## 記錄與評估
 
-## How to run
-1. Xcode → Run. The app opens on **Find**.
-2. Set up a table with a phone, a book with something right next to it (a USB hub, a box), keys, and a bottle, 40–60 cm in front of you. Hold the iPhone against your chest with your **left hand**, camera facing the table.
-3. Move the iPhone slowly for 2–3 s so tracking is normal. This is for testing only; in real use, tracking is normally ready by the time the command is spoken.
-4. Run these searches with eyes open, all in **one launch** (like last time, so speech stability is tested):
-   1. "find the book". First grab the thing **next to** the book on purpose and lift it. Expected: "I don't think you have the book yet." Then grab the book.
-   2. "find my keys" from about 60 cm. Listen for the tiled search (a slightly longer pause).
-   3. "find the phone". Grip it and lift it.
-   4. **Scan test:** turn about 90° away from the table, then say "find the phone". Follow "Turn left/right slowly". If it finds the phone at the edge of the view, follow "Turn a little … to face it."
-   5. An object that is **not** in the room: listen for the direction prompts, the give-up line, and "A guess: …".
-   6. Double tap during guidance (status), then hold 1 s (reset).
-5. **Room map:** say "scan the room" and turn slowly in a full circle, then tap. Then:
-   - hide the keys out of view and say "find my keys" → it should hint where they were;
-   - quit the app (swipe it away), relaunch, wait 8 s, and ask for something that is not in view.
-6. **Blindfolded tester:** the same steps 4.1–4.3 and 4.6 without help. Note every moment they did not know what to do.
-7. Tap **Export** (top right) → AirDrop to the Mac. If the diagnostics folder does not come through: **Files** app → On My iPhone → Sightline → `diagnostics` → long-press the newest folder → Compress → AirDrop the zip.
-8. Put everything in `logs/<commit>/` (not in git) and tell me what it said that was wrong or confusing. I will add the results to `docs/TEST_LOG.md` as T6.
+Export 取得每次啟動的 find_log CSV、diagnostics 影像／深度與 API 呼叫日誌。資料含居家照片，保留在 gitignored logs，不提交。
+
+新紀錄包括 safety_pause、stop、user_confirmed、hold_check_result 的 motion true/false，以及附帶 session/check ID 的 hold_check／hold_motion 影格。確認循環最多三次 SAM 與三次身份比對；SAM 每搜尋十二次檢查預算，每搜尋最多一次確認循環；手動 Check 同樣受總預算約束。
+
+每次測試記錄版本、手機／iOS、佩戴方式、光線、物件、距離、成功或停止原因、碰撞、誤報、完成時間、外援和疲勞。首次回應與首次有效動作引導分開計時；不把「正在尋找」當作三秒內完成引導。
+
+先完成實機與 VoiceOver 驗證，再與視障參與者共同調整流程。蒙眼測試只協助找流程問題，不能代替視障者的技能、習慣或使用成效。比較基準是參與者自己的原有取物方式，而不是只與另一個 AI 模型相比。
+
+## 已執行的本機驗證
+
+具體日期與結果更新於 TEST_LOG 的「人因修訂」條目。Mac 的單元測試、合成模擬器及 iOS 編譯分開記錄；目前真人案例仍全部待執行。
+
+## 本輪新增驗收
+
+1. 重跑 normal seed 3 與 bottle_centered seed 1，紀錄每次身份、近手、離位、共同位移與結束原因；最多三次影像、一次水平動作，不得重現四十公分累積抬高。
+2. 單張 SAM 漏檢後，仍可利用前後有效觀測確認；缺拇指但其他兩個共同指尖可見時仍可評估。
+3. 指定關節掉點少於一百五十毫秒可使用最近資料；更舊或只有一個共同指尖不能確認。
+4. 拿錯、只有手移動、只有物件移動、沿桌面推動、身份否定或只有一次身份肯定，都不能自動成功。
+5. 沒有可靠空間、視野或伸手餘裕，不要求移動；已要求的動作超過七公分、越界或失去手時，停手並結束確認。
+6. 結束後持續展示／移動手、重按 Check 或舊雲端結果返回，都不能自動重啟；自行確認後狀態須是已完成，New search 才可開新循環。
+
+這些仍需 iPhone、VoiceOver 與真實 API 驗證，不能以合成結果代替。
+
+補充必測：提示播放中、已送出確認影像但仍等待雲端時，加入障礙／使深度失效／移出視野，均須立即停；只剩一共同指尖、反向移動、超過七公分、寬物件只有邊緣碰撞也須否決。手先移開再回原位不能被視為穩定；第二張漏檢後，路徑排除使用保留 anchor 的表面。
+
+## 2026-10-31 設定頁卡住回歸驗收（實機待測）
+
+- 成功量測（例如 27 公分）自動回主畫面，不需找完成控制。
+- 未量測、量測中、失敗後均可長按或 VoiceOver 退出手勢離開；取消後不得因舊量測資料重開。
+- VoiceOver 開啟時設定後方的主畫面控制不可取得焦點。雙指點兩下可開始／停止量測，左右手選擇有語音回饋。
+- 設定說明自動播放；結束、逾時與重試流程須蒙眼核對，不把 Swift 型別檢查當作手勢／音訊驗證。

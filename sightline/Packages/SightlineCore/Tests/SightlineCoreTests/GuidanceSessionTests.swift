@@ -25,8 +25,7 @@ import simd
         let s = GuidanceSession(targetName: "phone", target: [0.3, 0, -0.5], cameraTransform: Self.camera, time: 0)
         // 31° to the right: turn to face it before reaching (2026-10-29).
         #expect(s.opening.map(\.text) == ["Found the phone. It's to your right, about 60 centimetres.",
-                                          "Turn a little to your right, to face it.",
-                                          "Hold your hand out in front of you, toward it."])
+                                          "Keep your body still. Show only the hand you will use, comfortably in front of the camera."])
     }
 
     @Test func noTurnWhenAhead() {
@@ -54,11 +53,11 @@ import simd
         var lines: [String] = []
         for i in 1...120 {
             let jitter: Float = i % 2 == 0 ? 0.005 : -0.005
-            let hand = HandKeypoints(joints: [.wrist: [jitter, 0, -0.3], .middleMCP: [0, jitter, -0.38]])
+            let hand = HandKeypoints(joints: [.wrist: [jitter, 0, -0.3], .middleMCP: [0, jitter, -0.38], .indexTip: [jitter, 0, -0.4]])
             lines += s.update(time: Double(i) / 30, hand: hand, cameraTransform: Self.camera,
                               targetDepthDelta: 0, speaking: false).lines.map(\.text)
         }
         #expect(lines.contains("I see your hand."))
-        #expect(lines.contains { $0.hasPrefix("Right, about") })
+        #expect(lines.contains { $0.hasPrefix("Move your hand right, about") })
     }
 }

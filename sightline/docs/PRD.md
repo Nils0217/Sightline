@@ -1,120 +1,67 @@
 <!-- labels: important -->
-# Sightline — PRD
+# Sightline 產品需求
 
-_As of 2026-10-26 · Owner: Nils_
+更新：2026-10-30。負責人：Nils。此版本依使用者要求修正十項人因與控制問題；歷史實驗數據保留在 TEST_LOG 與 SPIKE，不當作本版本的新驗證。
 
-## Positioning
-Say what you want; Sightline finds it and guides your hand to it. An indoor AI guide for blind, low-vision and older users.
+## 定位與範圍
 
-**Problem**
-- Description apps (Be My AI, Seeing AI) assume the user can aim the camera; blind users often can't tell what was captured.
-- LiDAR obstacle apps (White Cane) give distance only, no meaning.
-- None guide the hand the last metre: "right 10 cm, a bit higher, now grab."
+協助盲人與低視能使用者在身體靜止、手機固定胸前的情境，尋找並接近舒適伸手範圍內的室內物件。使用者以觸覺完成探索，自己選擇握法與是否確認。
 
-**Hackathon:** Meta Global AI Developer Hackathon, Indie Developer track, *Build for Your World*. Submission due 2026-11-04, 9 PM ET (6 PM PT) on the Cerebral Valley platform.
+本版包含：舒適伸手距離量測、語意搜尋、表面定位、分階段手部接近、當前可見障礙否決、觸覺探索提示、保守持有確認、固定操作與房間搜尋提示。
 
-- **Submit:** public repo + 3-minute demo video (primary judging artifact) + code and live product. No hosted link required; a native iOS app is fine.
-- **Must:** use Meta models via Meta Model API; clearly show what was built during the event (Oct 26 – Nov 4). Demo shows only hackathon-built features.
-- **Judging:** Stage 1 pass/fail (fits theme, uses Meta models). Stage 2, 0–10 each: Impact 30%, Use of Meta AI tooling 25%, Technical depth 20%, Demo 25%. Top 5 per track go to a live final round on 11/9.
-- **Bonus prizes worth targeting:** Best Agentic Use-Case ($5K, Muse as commander with tool calling); Most Viral on X ($20K, post the demo by 11/8).
-- **Avoid looking like an anti-project:** "simple image analyzer" and "medical advice" are named. Lead the demo with hand guidance, not object description.
+不包含：行走或室外導航、完整人體關節／前臂模型、安全抓取點或握力保證、外部感測器、帳號、離線搜尋、醫療建議與應用程式多語言。
 
-## Users and scenarios
-Primary: blind and low-vision people. Secondary: older adults with declining sight. Caregivers do the first room scan.
+先前 PRD 把地面新障礙偵測列為 MVP、同時排除行走導航，且把精確遮罩等同抓取點；本版以可及範圍內的手部路徑否決取代這些未驗證承諾。Action Button／Siri 仍是待辦，現有可用入口為畫面與 VoiceOver 動作，不列為已完成。
 
-| Scenario | User says | Sightline does |
-|---|---|---|
-| Find and grab | "Sightline, find the cup" | Locates the cup, guides the hand: "right 10 cm… now grab" |
-| New floor obstacle | (automatic) | Detects something not in the baseline map: "shoe on the floor, 1.2 m ahead" |
-| Read a label | "What is this?" | Reads name and text of the held object |
+## 必要行為
 
-## Architecture
-1. **Scan:** RoomPlan / LiDAR builds a baseline room map.
-2. **Label:** SAM 3.1 + Muse attach semantic labels, e.g. `cup @ (x, y, z)`.
-3. **Trigger:** Action Button (primary) or Siri / Vocal Shortcut via App Intents.
-4. **Command:** Muse Spark reads live state via tool calling; decides target, handles obstacles, rephrases.
-5. **Local loop (30–60 Hz):** ARKit + Vision hand pose → hand-to-target vector → spoken guidance.
-6. **Re-check (event-triggered):** SAM confirms the target is still there on target lock, when tracking confidence drops, and once before "now grab"; re-locks if moved. ≤ 5 SAM calls per guidance session.
-7. **Map fills blind spots:** obstacles outside the current view stay in the map to warn about collisions.
+1. 每次佩戴先選擇手別並量測舒適伸手距離。食指與相機至少穩定 0.8 秒，以距離中位數減三公分作保守界線；不將此稱為人體工學或臨床認證。背景後重新量測。
+2. 目標與中間路點超出量測界線、在身後或缺少可用表面時停止，不要求前傾或走近。
+3. 同一次取物固定方向基準。使用同一實際指尖，優先食指；指尖遺失不以掌心座標冒充接觸位置。手別選擇是操作要求，尚未強制辨識左右手。
+4. 平面物件依抬高、橫移、下降的路點接近可見近側邊緣；立體物件先在原側對齊深度，再接近近側表面。逐軸指令檢查其實際路徑。遇到不明障礙就停，不猜測繞行。
+5. 指尖、掌心、手腕與前臂近似路徑可否決動作。當前 LiDAR 點雲排除手與目標回波，但不能證明視野外或被遮擋區域暢通。
+6. 幾何接近只代表進入觸覺探索；不說「已碰到」或直接要求抓取。依平面、近側與杯／杯柄類型提供探索提示，不聲稱辨識到杯柄。
+7. tracking 非 normal、相機旋轉超過 15°／位移超過六公分、相機處理更新中斷超過 0.75 秒時停止並使舊結果失效。需新搜尋，不能恢復後自動沿舊路徑繼續。手消失超過 0.5 秒時插播停手、靜音並提供恢復／Check 選項。
+8. 持有自動確認採最多三次觀測，需其中兩次與參考物件身份肯定，且至少兩個相同實際指尖與物件共同移動。短暫掉點保留有效證據，拇指不是必要條件。單張圖、原位置空了、單一模型肯定或幾何靠近都不夠。
+9. 三次仍不足、超時或身份否定時結束本次確認並等待使用者，不把手重新導向舊位置或自動再試；使用者可重新搜尋、停止或明確自行確認。自行確認與自動確認在日誌分開。
+10. 任務期間主要區域與固定 Stop 控制一律停止；Status、Check、自行確認與 Finish scan 各有獨立入口與 VoiceOver 動作。停止涵蓋聆聽、雲端等待、掃描與取物確認。
 
-## Meta tools
-| Component | Role | Rate |
-|---|---|---|
-| Muse Spark | Commander: parse, read state, decide, phrase | event-driven, ≤ 1/s |
-| SAM 3.1 | Eyes: find and segment by text, re-confirm | event-triggered, ≤ 5 per session |
-| Muse Code | Scoped coding tasks (functions, bugs, tests) | dev time |
+詳細演算法門檻與限制以 [HUMAN_FACTORS](HUMAN_FACTORS.md) 為準；測試步驟以 [FIND_TEST](FIND_TEST.md) 為準。
 
-## Division of labour
-| Who | Owns |
+## 架構
+
+- 雲端：Muse Spark 理解與比對，SAM 分割；全部事件觸發。
+- 裝置：ARKit 深度與世界座標、Vision 關節、ReachCalibration、ReachProfile、ReachApproach、GuidanceSession、StepGuide、當前障礙點雲。
+- 確認：同一影格對齊影像／深度／關節；最多三次辨識，HandTrace 補短暫掉點，HoldVerification 累積共同位移與身份證據；單一循環不自動重啟。
+- 取消：session ID 與 hold-check ID 隔離舊任務與舊影格；麥克風取消可結束等待；相機更新監控獨立於影格到達。
+- 房間記憶只作搜尋提示，不作已確認現況或視野外通行保證。
+
+## 成功指標與發布條件
+
+| 指標 | 驗證方式／條件 |
 |---|---|
-| Claude Code / Claude | Main Swift codebase, architecture, code review, docs |
-| Muse Code | Scoped tasks on `muse/<task>` branches, reviewed before merge |
-| Nils | On-device builds and tests, numbers and logs, scope decisions |
+| 停止與過期結果 | 所有非閒置狀態測試 Stop；過期雲端結果不得恢復任務 |
+| 追蹤／相機失效 | 失效後無新移動提示與接近音；恢復不自動接續 |
+| 障礙否決 | 指尖路徑與手腕／前臂側邊障礙均阻止指令；無障礙漏檢保證 |
+| 誤報成功 | 錯物件、物件未移動、手從物件上方掠過、模型分歧等測試逐項記錄 |
+| 可及範圍 | 目標與中間路點都不能越界；不要求改變站位或前傾 |
+| 真實使用價值 | 視障者與自己的原有方法比較；記錄時間、碰撞、誤報、外援、疲勞與主觀負擔 |
+| 語音／無障礙 | VoiceOver 開關兩種模式完成完整流程；使用者可辨別聆聽、等待、探索與停止 |
+| 延遲 | 分開測量首次回應、首次可執行引導與兩影格確認時間；本機安撫提示不算動作引導 |
+| API 成本 | 依實際日誌與帳單更新；本版不沿用舊單影格持有檢查成本 |
 
-## Cost model (zero out-of-pocket)
-All usage bills the $150 hackathon Model API credit; no paid Muse Code plan. Meta requires a card on file, so a Spend Limit ≤ $150 is set.
+程式測試、模擬、編譯、實機測量與視障使用者研究分開報告。測試通過不等於安全認證。真人評估尚未執行。
 
-| Item | Estimate |
-|---|---|
-| One guided grab (SAM ≤ 5 calls, Muse ~10 calls at `reasoning_effort: medium`, 512 px images) | ~$0.05–0.15 |
-| Dev + demo (~300 sessions) | ~$15–45 |
-| Muse Code coding usage | biggest risk; cap ~$15/day, else shift to Claude |
+## 黑客松與相關研究
 
-Verify with the Billing delta after the first spike run (see `docs/SPIKE.md`).
+專案原始時程記錄為 2026-10-26 至 11-04；原提交目標為公開程式庫與三分鐘展示影片。賽事規則、獎項與截止時間本次未重新查核，提交前以官方資訊為準。
 
-## Competition and differentiation
-Closest: **NaviSense** (Penn State, ASSETS '25) — voice → VLM → LiDAR/AR → hand guidance; and **AIGuide** (ARKit hand guidance). Commercial: Seeing AI Find My Things, Google Lookout Find, Apple Magnifier, Be My AI, Envision Ally Solos, White Cane.
+相關工作：NaviSense、AIGuide，以及 [CMU PalmSight](https://publications.ri.cmu.edu/palmsight-an-assistive-technology-helping-the-blind-to-locate-and-grasp-objects)。展示聚焦停止、恢復、不確定性與使用者自主，不使用「精確遮罩即可產生安全抓取點」的說法。
 
-Sightline's differences:
-1. Tracks the **actual hand** (Vision) with the phone worn on the chest; NaviSense infers the hand from phone motion, so the phone must be in the reaching hand.
-2. **Baseline map + change detection** remembers the home and spots new obstacles; NaviSense avoids pre-scanning.
-3. **Muse as commander** via tool calling, not just a recognizer.
-4. **Pixel-level SAM masks** give a precise 3D grasp point, not a box centre.
+補充驗收：持續移動中的軸與可能新指令的軸都需檢查，實際逐軸終點也需在舒適範圍；至少四分之一抽樣深度且不少於十六點有效，才能把障礙點集合視為可用觀測。自身前臂排除與掃掠檢查使用同一近似模型，遮擋區域仍屬未知。確認提示播完並留一秒反應時間後才取得第二影格；候選保留自身來源影格的參考裁圖。
 
-Cite NaviSense in the demo and README.
+遮擋修訂：同一指尖在短暫掉點時維持選擇，連續缺失超過 0.5 秒才考慮換到其他實際指尖，避免每影格換點令靜止判定不斷重設。立體物件先在原側對齊深度，再進行側向接近；每段仍需通過舒適範圍與障礙檢查，不能保證始終在視野內。
 
-## MVP scope
-**In:** room scan + labelled baseline map; Action Button (primary) / Siri trigger; full find-and-grab flow; new-obstacle detection; speech + distance tones.
-**Out:** walking navigation, outdoor, external sensors, multi-language, accounts, offline, medical advice.
+視野邊緣：目標相對相機水平方向超過二十度時，先要求手保持放下、明說轉動身體面向物件，然後重新搜尋；不直接側向伸手，也不在同一取物段偷偷改變座標基準。持有確認仍需可見的同一手指關節；握姿或物件遮住所有可用關節時，只能保留不確定或由使用者自行確認。
 
-## Milestones
-| Date | Milestone |
-|---|---|
-| 10/26 | Spike 0 (`docs/SPIKE.md`): ARKit sample on device; Muse + SAM on 5 photos with latency and cost; read official rules |
-| 10/27–28 | **Gate:** hand 3D error ≤ 3 cm; relocalization |
-| 10/29–31 | Core: find + grab |
-| 11/1–2 | Obstacle detection + voice trigger |
-| 11/2–3 | Blindfold testing and fixes |
-| 11/3–4 | Demo video, README |
-| 11/4 | Submit before noon PT |
-
-Gate fallbacks: hand error > 3 cm → guide to within 10 cm then prompt touch exploration; relocalization unstable → scan and use in the same session.
-
-## Success metrics
-| Metric | Target |
-|---|---|
-| Hand-to-target 3D error | ≤ 3 cm |
-| Blindfold grab success | ≥ 8/10 |
-| Command to first guidance | ≤ 3 s |
-| Local guidance update rate | ≥ 10 Hz |
-| Floor obstacle detection | objects ≥ 5 cm tall |
-| API spend | < $150 total |
-
-## Risks
-| Risk | Mitigation |
-|---|---|
-| Borrowed iPhone time limited | Fixed 2–3 h/day on the Mac; unit-test logic on Mac first |
-| Unfamiliar with Swift / Xcode | Code written by Claude Code; run Apple's ARKit sample day 1 |
-| Hand 3D error too large | Measure 10/27–28; fallback above |
-| Relocalization fails | Same-session scan for demo |
-| SAM / Muse latency | Cloud only identifies; guidance is local; "identifying" tone while waiting |
-| Credit burned by coding agent | Claude writes the main code; Muse Code on scoped tasks; daily Billing check |
-| Muse misnames object | Say "not sure"; user can correct by voice |
-| Judges can't run a native app | Check rules; video + repo, TestFlight as backup |
-| Safety liability | Indoor only; not a cane or guide-dog replacement; no walking navigation |
-
-## Vision
-Sight should not decide whether someone can live on their own.
-- **2–4 weeks after:** Chinese voice, multi-room maps, small pilot with a blind-services org.
-- **1–3 months:** chest depth camera (e.g. OAK-D Lite) + earbuds, or Ray-Ban Meta via the Wearables Device Access Toolkit.
-- **Later:** room-to-room indoor navigation, caregiver remote view, MapAnything 3D reconstruction for non-Pro phones.
+本輪確認控制以 HUMAN_FACTORS「有限次確認修訂」為準：單次水平四公分、最多三次觀測／三十五秒、身份與運動分離、等待決定的固定出口。不得回復成反覆向上抬或每次漏檢清空全部證據。

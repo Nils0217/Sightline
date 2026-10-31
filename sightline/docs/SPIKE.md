@@ -1,4 +1,6 @@
 <!-- labels: important, testing -->
+
+> 2026-10-30 更新：本文件保留原始實驗／參考紀錄；目前取物行為、成本計數與驗收以 [PRD](PRD.md)、[人因修訂](HUMAN_FACTORS.md) 與 [FIND_TEST](FIND_TEST.md) 為準。歷史通過結果不代表新版本已完成實機或視障使用者驗證。
 # Spike & validation checklist
 
 Goal: prove the riskiest paths work before building the full app. Record every number in the table at the bottom.
@@ -147,6 +149,40 @@ Findings:
   - "turn to face it" for objects at the edge of the view.
 
   Simulator 12/12 scenarios at 20/20; 97 unit tests.
-- [ ] Device run v5 (Nils): `docs/FIND_TEST.md`, then add T6 to `docs/TEST_LOG.md`
+- [x] Device run v5 (Nils, 2026-10-29 09:04, `logs/V5`): 17 findings in `docs/TEST_LOG.md` T6.
+- [x] v6 fixes (2026-10-29, `docs/TEST_LOG.md` T6):
+  - hold check uses both layers (SAM "gone from its spot / moved with the hand" + Spark) and moves the target with the object;
+  - fingertips decide contact, palm gives left/right/up/down, leading fingertip gives forward/back;
+  - no "Got it" from depth or geometry alone;
+  - objects on doors and walls (vertical support) are not treated as flat;
+  - agent at effort medium without wording limits, keeps colours and details, offers only options it found, `scan_for` and `map_room` tools;
+  - picked-up objects leave the room map; Spark guesses which mapped thing an unknown object is near;
+  - turn amounts ("a quarter turn to your left"); room scan turns one way;
+  - listen-end earcon, transcript logged, app lifecycle logged;
+  - cost limits raised (AGENTS.md).
+
+  Simulator 12/12 scenarios at 20/20; 101 unit tests.
+- [ ] Device run v6 (Nils): `docs/FIND_TEST.md`, then add T7 to `docs/TEST_LOG.md`
+- [ ] Voice-first control (Siri / App Shortcuts, Action Button, always-listening in the app): after v6 confirms the audio path. Plan discussed 2026-10-29.
 - [ ] Pre-grab SAM confirm (PRD step 6) — deferred: the reaching hand occludes the object; decide after v1 test.
 - [ ] Action Button / App Intents trigger
+
+## 人因修訂待驗證（2026-10-30）
+
+- [x] 實作舒適距離量測、目標／路點界線與分階段接近。
+- [x] 實作追蹤、相機與障礙停止，以及固定停止／狀態／Check／自行確認控制。
+- [x] 實作兩影格共同移動與語意比對門檻；單影格與 Spark 單獨肯定不成功。
+- [ ] 新版 iPhone／VoiceOver 全流程驗證：依 FIND_TEST。
+- [ ] 新版雲端兩影格確認延遲與實際成本。
+- [ ] 視障者與原有方法的比較、共同設計與疲勞評估。
+
+舊版單元測試與模擬器成功率僅對當時版本成立；目前驗證結果見 TEST_LOG 人因修訂條目。
+
+## 本輪確認回歸
+
+- [x] 以 HoldVerification 取代一次失敗就清空證據的固定配對流程。
+- [x] 限三次觀測、一次水平動作與明確待決定出口。
+- [x] 新增漏檢、遮擋、錯物件、獨立移動與逾時反例。
+- [ ] iPhone／VoiceOver／真實身份提示與雲端延遲驗證。
+
+本輪最終本機結果：169 項測試／33 個 suite 通過，iOS 原始碼型別檢查通過；四十次合成反例零自動成功。normal 與 bottle_centered 自動完成率各 4/10，其餘明確無法確認，不能宣稱可靠取物。詳見 TEST_LOG「有限次確認修訂」。

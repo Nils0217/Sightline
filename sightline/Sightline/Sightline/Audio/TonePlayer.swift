@@ -25,6 +25,8 @@ final class TonePlayer {
         case failure
         /// Long-press reset: two low notes.
         case reset
+        /// Microphone off, the command was heard (v5 test: the tester could not tell whether it listened).
+        case heard
 
         var notes: [(hz: Double, seconds: Double)] {
             switch self {
@@ -32,6 +34,7 @@ final class TonePlayer {
             case .success: [(784, 0.08), (988, 0.08), (1175, 0.12)]
             case .failure: [(440, 0.1), (330, 0.14)]
             case .reset: [(330, 0.08), (0, 0.05), (330, 0.08)]
+            case .heard: [(990, 0.06), (660, 0.06)]
             }
         }
     }

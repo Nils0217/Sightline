@@ -1,4 +1,6 @@
 <!-- labels: testing, reference -->
+
+> 2026-10-30 更新：本文件保留原始實驗／參考紀錄；目前取物行為、成本計數與驗收以 [PRD](PRD.md)、[人因修訂](HUMAN_FACTORS.md) 與 [FIND_TEST](FIND_TEST.md) 為準。歷史通過結果不代表新版本已完成實機或視障使用者驗證。
 # S0.1 — Run Apple's ARKit scene-reconstruction sample on the iPhone 15 Pro
 
 Goal: prove the Mac → iPhone toolchain works and LiDAR mesh classification runs. Do **not** copy the sample into this repo; keep it in `~/Developer/apple-samples/`.

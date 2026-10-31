@@ -1,7 +1,8 @@
 // labels: production, needs-review, important
 // Six hand keypoints from Vision's 21 joints (Nils, 2026-10-28: one point is not enough to grasp):
-// five fingertips + palm centre. Guidance steers the palm centre (stable, rarely hidden while
-// grasping); the fingertips tell whether the object is between them.
+// five fingertips + palm centre. The reference property supports diagnostics and older consumers;
+// GuidanceSession selects one physical fingertip for every guidance axis and retains it through
+// brief occlusion. Geometry is provisional evidence, never proof of contact or a secure grip.
 
 import simd
 
@@ -40,6 +41,12 @@ public struct HandKeypoints: Sendable, Equatable {
         let t = Array(tips.values)
         if t.count >= 2 { return t.reduce(.zero, +) / Float(t.count) }
         return joints.values.first
+    }
+
+    /// The fingertip farthest along `forward` (unit, horizontal): the part of the hand that reaches the
+    /// object first. nil without fingertips.
+    public func leadTip(forward: SIMD3<Float>) -> SIMD3<Float>? {
+        tips.values.max { simd_dot($0, forward) < simd_dot($1, forward) }
     }
 
     /// Number of the six keypoints (5 tips + palm centre) available.

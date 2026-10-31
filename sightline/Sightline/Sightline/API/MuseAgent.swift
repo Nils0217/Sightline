@@ -56,10 +56,22 @@ nonisolated enum MuseAgent {
         ["type": "function_call", "call_id": c.callID, "name": c.name, "arguments": c.arguments]
     }
 
-    /// Yes/no check: is the object in this crop a `noun`? Effort minimal (fast path). nil = unclear answer.
+    /// Yes/no check: is the object in the drawn box a `noun`? Effort minimal (fast path). nil = unclear answer.
     static func verify(noun: String, jpeg: Data, label: String) async throws -> Bool? {
-        try await yesNo("A blind user asked for: \(noun). Is the main object in the middle of this photo a \(noun)? "
+        // v7: SAM boxed a green book under a white tube; on a small crop Spark said no. The app now sends the
+        // whole photo with the box drawn (FindModel.verify).
+        try await yesNo("A blind user asked for: \(noun). An object detector drew a green box on this photo. Is the thing "
+                        + "inside the green box a \(noun), even if it is partly covered by other things? "
                         + "Answer with one word: yes or no.", noun: noun, jpeg: jpeg, label: label)
+    }
+
+    /// Identity only. Geometry and shared movement are evaluated independently on the device.
+    static func verifyObjectIdentity(noun: String, jpeg: Data, reference: Data, label: String) async throws -> Bool? {
+        try await yesNo("The user asked for their \(noun). Image 1 is the reference object. "
+            + "Image 2 has a green box around one candidate. Is that boxed candidate the same object as image 1, "
+            + "including the requested distinguishing details? Decide identity only; the grip or thumb may be hidden. "
+            + "Do not infer identity from hand position. Answer yes, no, or unsure.",
+            noun: noun, images: [reference, jpeg], label: label)
     }
 
     /// "I think I have it": is the hand holding the object. With `reference` (the object as seen at
@@ -87,6 +99,18 @@ nonisolated enum MuseAgent {
                                    noun: noun, images: [jpeg], effort: .minimal, label: label)
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return clean.isEmpty || clean.lowercased().hasPrefix("none") ? nil : clean
+    }
+
+    /// The object is not in the room map: which mapped item is it most likely near? Returns the item's
+    /// number in `items` (RoomInventory.describe), nil = no idea. Effort medium (reasoning, once per search).
+    static func guessNear(noun: String, items: String, label: String) async throws -> Int? {
+        let text = try await reply("A blind user is looking for their \(noun). It is not in view and was never seen in "
+                                   + "this room. These things were seen in the room (number. name: position relative to "
+                                   + "the user):\n\(items)\nWhere is a \(noun) most likely to be? Answer only with the "
+                                   + "number of the one thing it is most likely on, in or next to, or 'none' if no "
+                                   + "item makes it likely.",
+                                   noun: noun, images: [], effort: .medium, label: label)
+        return AgentText.firstInteger(text)
     }
 
     /// Room scan: the objects a blind user might ask for in this photo, as

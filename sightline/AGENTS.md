@@ -15,6 +15,17 @@ Native iOS app, Swift + SwiftUI + ARKit. Target device: iPhone 15 Pro (LiDAR, A1
 
 Muse Code works on a branch per task (`muse/<task>`); Claude reviews before merge.
 
+## Current reach-control contract (2026-10-30)
+When changing guidance, perception, audio, controls, or verification, read `docs/HUMAN_FACTORS.md` and use `docs/FIND_TEST.md` for acceptance cases. These replace the earlier point-guidance and single-image hold assumptions below.
+- Measure a comfortable reach after each mounting/background cycle; gate targets and waypoints.
+- Keep one real fingertip and a fixed direction frame; use staged tabletop approach and let observed obstacles veto motion.
+- Treat proximity as exploration, not confirmed contact. Preserve the user's choice of grip and explicit self-confirmation.
+- Tracking/camera failure latches a stop until a new search. Stop cancels microphone/captures and invalidates late results.
+- Hold verification is one bounded cycle per search: at most 3 observations in 35 seconds. Two identity-positive observations must show the object and at least two common physical fingertips moving together; the thumb is optional. Retain good evidence across a missing observation. Supported objects must rise, not merely slide.
+- Request at most one 4 cm horizontal movement, only after the hand settles and the current scene/reach/view allow it. Capture on observed movement (4-second deadline), not a repeated lift. Missing evidence ends with explicit self-confirmation, New search, or Stop; no automatic restart.
+- Each cycle uses at most 3 SAM + 3 identity calls; a missing SAM observation skips identity. The hold-SAM budget remains 12 per search. No per-frame cloud calls. Historical limits below are not the current hold policy.
+- Report code tests, simulation, compilation, device measurements and blind-user evaluation separately. Keep historical logs; mark superseded procedures explicitly.
+
 ## Architecture rules
 - **Cloud = understand and decide.** Muse Spark and SAM 3.1 via Meta Model API (`https://api.meta.ai/v1`, OpenAI-compatible). Never call them per frame.
 - **Device = measure and guide.** ARKit (LiDAR depth, world tracking, RoomPlan), Vision hand pose, local guidance controller. The 30–60 Hz loop must never wait on a network call.
@@ -27,7 +38,7 @@ Muse Code works on a branch per task (`muse/<task>`); Claude reviews before merg
 - Meta requires a card on file to use the credit, so set the Billing **Spend Limit** to $150 or less. Alerts at $50 / $100 / $140.
 - **SAM is event-triggered, not 1 Hz:** call it on target lock, when tracking confidence drops, and once before "now grab". Target ≤ 5 calls per guidance session.
 - **Downscale images to ~512 px** on the long edge before any upload.
-- **Muse Spark effort by job** (Nils, 2026-10-28, from G4): `minimal` for fast-path calls (naming objects, short yes/no checks, spoken replies); `medium` for real reasoning (choosing between several SAM instances, planning). Keep `max_output_tokens` generous — reasoning tokens count toward it. Spark is never on the critical path to the first spoken guidance.
+- **Muse Spark effort by job** (Nils, 2026-10-28, from G4): `minimal` for fast-path calls (naming objects, short yes/no checks, spoken replies); `medium` for real reasoning (choosing between several SAM instances, planning) and, since 2026-10-29, for every agent turn (understanding the user matters more than a second of latency). Keep `max_output_tokens` generous — reasoning tokens count toward it. Spark is never on the critical path to the first spoken guidance.
 - **Exceptions approved 2026-10-29 (Nils: "全做"), all event-triggered:**
   - Keep-scanning when the object is not in view: ≤ 8 SAM calls per search.
   - Small objects (keys, rings …): 4 SAM calls per view (2×2 tiles of a 930 px photo, each tile ~512 px).
@@ -36,6 +47,11 @@ Muse Code works on a branch per task (`muse/<task>`); Claude reviews before merg
   - Scan give-up: 1 Spark guess at minimal effort.
 
   Worst case, a small object with a full scan is about 37 SAM calls, roughly $0.09.
+- **Correctness first, cost later (Nils, 2026-10-29 after the v5 test, ~$1 spent so far):** limits are raised so the whole flow works end to end; revisit after it does.
+  - Every hold check: 1 SAM call (both layers, not only when the hand moved away).
+  - Agent (unparsed commands, several candidates): effort `medium`, up to 12 SAM calls per search (several `find_object` calls to see which options are really here).
+  - Room-map guess when the object is not in the map: 1 Spark call at `medium`.
+  - Still event-triggered: nothing per frame.
 - Log latency and estimated cost of every API call to `logs/api_calls.csv`. Reuse fixed test images in `spike/images/`.
 - Coding agents: if Muse Code spend exceeds ~$15 in a day, move work back to Claude.
 
