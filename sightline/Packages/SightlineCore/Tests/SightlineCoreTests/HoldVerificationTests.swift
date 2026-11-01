@@ -116,7 +116,7 @@ import simd
         s.beginManualCheck()
         #expect(s.resolveCheck(nil, time: 1).map(\.text) == ["I can't tell. Hold it up to the camera."])
         _ = s.update(time: 4, hand: hand([0, 0, -0.4]), cameraTransform: matrix_identity_float4x4, targetDepthDelta: nil, speaking: false)
-        #expect(s.resolveCheck(nil, time: 4).map(\.text) == ["I still can't tell. It may be the phone."])
+        #expect(s.resolveCheck(nil, time: 4).isEmpty && s.takeDescribeRequest())
         for i in 5..<100 {
             let out = s.update(time: Double(i), hand: hand([0, 0, -0.4]), cameraTransform: matrix_identity_float4x4,
                                targetDepthDelta: nil, speaking: false)

@@ -377,8 +377,7 @@ struct SimUser {
     var promptsHeard = 0
     /// Holding it and told "Double tap to check it.": asks "Is this it?" (case 2).
     var wantsCheck = false
-    /// Case 1 (Nils, 2026-11-01): holding the real thing after "I still can't tell. It may be the X.",
-    /// the user feels it is right and closes the app.
+    /// Case 1 (Nils, 2026-11-01): holding the real thing after the app described it, the user closes the app.
     var closesApp = false
     var doubleTaps = 0
     /// Body yaw (radians, + = right), same convention as Camera.
@@ -451,10 +450,13 @@ struct SimUser {
         if text.hasPrefix("I can't tell") || text.hasPrefix("Yes. That's") { return }
         // In the fault scenarios the user does not really hold the target (wrong object, nothing moved, ...),
         // so they never close the app as done and never ask: those runs test the automatic check alone.
-        if text.hasPrefix("I still can't tell") {
+        // The app describes what is in the hand (Spark, here a stand-in line): holding the real thing, the user
+        // now knows and closes the app.
+        if text.hasPrefix("In your hand") {
             if gripped && lifted, sc.holdFault == .none { closesApp = true }
             return
         }
+        if text.hasPrefix("I can't see it. Hold it") { return }
         // "Double tap to check it.": someone holding something asks "Is this it?", at most twice.
         if text.hasPrefix("Double tap") {
             if doubleTaps < 2, gripped && lifted, sc.holdFault == .none { doubleTaps += 1; wantsCheck = true }
@@ -769,6 +771,10 @@ func run(_ sc: Scenario, seed: UInt64, maxTime: Double = 150) -> RunResult {
             note(t, "DECIDE \(result.map(String.init) ?? "nil") \(reason.rawValue)")
             if result == nil { unclear += 1 }
             session.resolveCheck(result, time: t).forEach { say($0, t) }
+            // Stand-in for MuseAgent.describeHeld (the app's Spark description of the photo).
+            if session.takeDescribeRequest() {
+                say(SpokenLine(text: "In your hand I see " + (user.gripped && sc.holdFault == .none ? "the \(session.targetName)." : "something else."), interrupt: true), t)
+            }
         }
         if user.closesApp { outcome = "self_closed"; note(t, "USER CLOSED THE APP"); break }
         if session.endReason != nil { outcome = "ended"; break }
@@ -818,7 +824,7 @@ if chosen.isEmpty {
 }
 
 print("Synthetic results only; ended (out of reach / blocked) is reported separately from a completed grasp.")
-print("ok counts self_closed (holding the target after \"I still can't tell\", the user closes the app); self = how many of ok")
+print("ok counts self_closed (holding the target after the app described it, the user closes the app); self = how many of ok")
 print("wrong_object / hand_only / object_only / slide_only: ok means a wrong \"Got it\" (should be 0/20)")
 print("hits = times a hand went into the obstacle or a cup (ground truth; should be 0)")
 print("silent = runs with > 12 s of silence while guiding/grabbing; loop = runs with a line said 3+ times in 10 s")

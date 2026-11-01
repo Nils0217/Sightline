@@ -142,7 +142,7 @@ import Testing
     }
 
     /// Case 2 (Nils, 2026-11-01): "Is this it?" that the photo cannot settle asks to hold it up, looks once
-    /// more after 3 s even with the hand away from the spot, then says what it thinks and stops asking.
+    /// more after 3 s even with the hand away from the spot, then hands over to the app's description of the photo.
     @Test func unsureAsksToHoldItUpAndLooksOnceMore() {
         var s = GuidanceSession(targetName: "phone", target: object.centre, object: object, cameraTransform: downCamera, time: 0)
         s.beginManualCheck()
@@ -158,13 +158,32 @@ import Testing
             if out.requestCheck {
                 checks.append((t, out.checkReason))
                 said += s.resolveCheck(nil, time: t).map(\.text)
+                if s.takeDescribeRequest() { said.append("DESCRIBE") }
             }
         }
         // Later checks are the ordinary stalled ones (the hand stays still away from the spot).
         #expect(checks.filter { $0.1 == "held_up" }.count == 1, "\(checks)")
         #expect(checks.first?.1 == "held_up" && abs((checks.first?.0 ?? 0) - 3) < 0.1, "\(checks)")
         #expect(said.filter { $0 == "I can't tell. Hold it up to the camera." }.isEmpty, "\(said)")
-        #expect(said.contains("I still can't tell. It may be the phone."), "\(said)")
+        #expect(Array(said.prefix(2)) == ["Checking.", "DESCRIBE"], "\(said)")
+    }
+
+    /// No hand in view when the look is due: one "Hold it in front of the phone.", then it looks anyway.
+    @Test func heldUpWithoutHandAsksToShowItOnce() {
+        var s = GuidanceSession(targetName: "phone", target: object.centre, object: object, cameraTransform: downCamera, time: 0)
+        s.beginManualCheck()
+        _ = s.resolveCheck(nil, time: 0)
+        var said: [(Double, String)] = []
+        var checkAt: Double?
+        var t = 0.0
+        for _ in 0..<300 where checkAt == nil {
+            t += 1.0 / 30
+            let out = s.update(time: t, hand: nil, cameraTransform: downCamera, targetDepthDelta: 0, speaking: false)
+            said += out.lines.map { (t, $0.text) }
+            if out.requestCheck { checkAt = t }
+        }
+        #expect(said.filter { $0.1 == "I can't see it. Hold it in front of the phone." }.count == 1, "\(said)")
+        #expect(abs((checkAt ?? 0) - 6) < 0.1, "\(String(describing: checkAt))")
     }
 
     /// An asked check that sees it in the hand answers the question.

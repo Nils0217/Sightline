@@ -113,6 +113,8 @@ final class FindModel {
     var bodyScale: BodyScale { BodyScale(reach: reachDistance, hand: handLength) }
     /// OBSOLETE (2026-11-01): a double tap no longer claims; always false.
     @ObservationIgnored private var userClaimed = false
+    /// The last hold-check photo, for `describeHeld`.
+    @ObservationIgnored private var lastCheckPhoto: Data?
     /// Burst recordings (BurstRecorder.swift): per search and per launch caps.
     @ObservationIgnored private var burstsThisSearch = 0
     @ObservationIgnored private var burstsThisLaunch = 0
@@ -376,6 +378,7 @@ final class FindModel {
         log("spot_evidence", evidence?.summary ?? "none")
         let id = sessionID, check = holdCheckID
         let reference = referenceCrop
+        lastCheckPhoto = s.jpeg
         let supported = guide?.object?.supportHeight != nil
         Task {
             async let seen = holdCandidates(noun, snapshot: s, expectedSession: id, expectedCheck: check)
@@ -406,13 +409,31 @@ final class FindModel {
         lastCheckUnsure = result == nil
         var session = guide
         let lines = session?.resolveCheck(result, time: lastFrameTime) ?? []
+        let describe = session?.takeDescribeRequest() ?? false
         guide = session
         checkFromSession = false
         lines.forEach(say)
+        if describe { describeHeld() }
         switch result {
         case true?: finish(spoken: nil, event: "hold_yes")
         case false?: phase = .guiding
         case nil: phase = .grabbing
+        }
+    }
+
+    /// The held-up look still cannot tell (Nils, 2026-11-01: never leave the user with "it may be"): Spark tells
+    /// the user how to bring it into view, or what it sees in their hand, so they can judge. 1 Spark call.
+    private func describeHeld() {
+        guard let noun = targetName, let photo = lastCheckPhoto else { return }
+        let id = sessionID, reference = referenceCrop
+        log("describe_held", "")
+        Task {
+            let text = (try? await MuseAgent.describeHeld(noun: noun, jpeg: photo, reference: reference,
+                                                         label: "describe_\(id)")) ?? ""
+            guard id == sessionID, phase == .grabbing || phase == .guiding else { return }
+            let line = text.isEmpty ? "I can't see it well. Hold it in front of the phone." : text
+            log("describe_held_result", line)
+            say(SpokenLine(text: line + " Double tap to check again.", interrupt: true))
         }
     }
 

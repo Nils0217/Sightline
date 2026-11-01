@@ -158,7 +158,16 @@ public struct GuidanceSession: Sendable {
     /// "I can't tell. Hold it up to the camera." was said in this search (once); a check follows after `showWait`.
     private var heldUpAsked = false
     private var heldUpDue: Double?
+    private var heldUpExtended = false
     public var showWait: Double = 3
+    /// After the held-up look still cannot tell, the app asks Spark to tell the user what it sees in their hand,
+    /// or how to move it into the photo (Nils, 2026-11-01: "It may be the X." was not a responsible answer).
+    private var describeRequested = false
+    /// True once after an unsure held-up (or later asked) check: the app describes the photo to the user.
+    public mutating func takeDescribeRequest() -> Bool {
+        defer { describeRequested = false }
+        return describeRequested
+    }
     private var lastObstacleWarning: Double = -.infinity
     /// Grasp history while grabbing.
     /// Kept for the log/overlay; the leave decision no longer depends on it (see header).
@@ -300,11 +309,13 @@ public struct GuidanceSession: Sendable {
             // Something the user can do (Nils: no vague lines): show it to the camera, then one more look.
             if !heldUpAsked {
                 heldUpAsked = true
+                heldUpExtended = false
                 heldUpDue = time + showWait
                 return [SpokenLine(text: "I can't tell. Hold it up to the camera.", interrupt: true)]
             }
             heldUpDue = nil
-            return [SpokenLine(text: "I still can't tell. It may be the \(targetName).", interrupt: true)]
+            describeRequested = true  // the app says what the photo shows, or how to bring it into view
+            return []
         }
     }
 
@@ -705,6 +716,13 @@ public struct GuidanceSession: Sendable {
             // is away from the spot on purpose, so leaving or rising does not count until then.
             if let due = heldUpDue {
                 if time >= due {
+                    // No hand in view: say how to show it, wait once more, then look anyway.
+                    if hand == nil, !heldUpExtended {
+                        heldUpExtended = true
+                        heldUpDue = time + showWait
+                        out.lines.append(SpokenLine(text: "I can't see it. Hold it in front of the phone.", interrupt: false))
+                        return out
+                    }
                     heldUpDue = nil
                     return check(&out, "held_up", force: true)
                 }

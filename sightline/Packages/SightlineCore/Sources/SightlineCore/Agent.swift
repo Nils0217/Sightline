@@ -158,7 +158,9 @@ public enum AgentTools {
         (4) Nothing found here: if room_items lists it, say where it was; then scan_for it. \
         A candidate with confidence 0.5 or more is usually right; do not drop it for a different object \
         unless the user rejects it. Do not call find_object again for a phrase in not_found; use scan_for. \
-        Speak in short, plain sentences. Say "not sure" instead of guessing. Never give medical advice. \
+        Say everything the simplest way a blind person can act on at once: plain spoken words, the most \
+        useful thing first (one difference between options, not every detail), nothing extra, one direction \
+        at most. Say "not sure" instead of guessing. Never give medical advice. \
         Do not put directions in select_target's say; the guidance gives them. \
         Finish with select_target, scan_for, map_room, or stop after telling the user why.
         """

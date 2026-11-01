@@ -89,13 +89,30 @@ nonisolated enum MuseAgent {
                                noun: noun, images: [reference, jpeg], label: label)
     }
 
+    /// Nils, 2026-11-01: no word caps; ask for the simplest reply instead.
+    static let simplest = "Say it the simplest way a blind person can act on at once: plain spoken words, the most useful "
+        + "thing first, nothing extra, one direction at most, no lists, no button names. "
+
+    /// The held-up look could not tell (case 2): how to bring it into view, or what is in the hand. "" = no answer.
+    static func describeHeld(noun: String, jpeg: Data, reference: Data?, label: String) async throws -> String {
+        let ref = reference == nil ? "" : "Image 1 shows their \(noun) where it was found. "
+        let now = reference == nil ? "The photo" : "Image 2"
+        return try await reply("A blind user asked for their \(noun) and is holding something up to their chest camera; the app "
+                               + "could not tell if it is the \(noun). " + ref + now + " is the camera now. If what they hold is "
+                               + "not in the photo, cut off, too close or too dark, tell them how to move it so the camera sees it "
+                               + "(left, right, up, down, closer, further). Otherwise tell them what you see in their hand: its "
+                               + "colour, shape, size and any words on it, and whether it looks like their \(noun). " + simplest,
+                               noun: noun, images: (reference.map { [$0] } ?? []) + [jpeg], effort: .minimal, label: label)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// The scan gave up: one short spoken suggestion of where to look, from a wide photo. nil = no idea.
     static func suggest(noun: String, jpeg: Data, label: String) async throws -> String? {
         let text = try await reply("A blind user is looking for their \(noun). An object detector looked around the room and "
-                                   + "could not find it. This is their chest camera now. In one short sentence (at most 18 words) "
+                                   + "could not find it. This is their chest camera now. In one sentence "
                                    + "tell them where it most likely is or where to check next, using left, right, ahead, "
                                    + "lower or higher and the furniture you see. If you can see it, say exactly where. "
-                                   + "If you have no idea, answer: none.",
+                                   + "If you have no idea, answer: none. " + simplest,
                                    noun: noun, images: [jpeg], effort: .minimal, label: label)
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return clean.isEmpty || clean.lowercased().hasPrefix("none") ? nil : clean
@@ -181,7 +198,7 @@ nonisolated enum MuseAgent {
                                    + "If it is not yet clear which one they want, ask one short question that tells them apart "
                                    + "by what a blind person can know: where it is (left, right, nearer, further), size, shape, "
                                    + "what it is made of or what is in it, or a colour they may know. Once it "
-                                   + "is clear, say a short confirmation. At most 20 words. "
+                                   + "is clear, say a short confirmation. " + simplest
                                    + #"Answer only with JSON: {"say":"...","choice":null} with choice "A" or the number once clear."#,
                                    noun: "which_one", images: [jpeg], effort: .minimal, label: label)
         guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"),
@@ -201,8 +218,7 @@ nonisolated enum MuseAgent {
                                + "step-by-step guidance is paused until it can. The hand must be in front of them, below the "
                                + "phone, roughly toward the \(noun), and not behind or covered by the object. "
                                + earlier + "The user just said: \"\(said)\"\n"
-                               + "Answer them in one or two short spoken sentences, at most 25 words, plain words, no lists, no "
-                               + "button names. Help them get their hand back in view, or answer what they asked.",
+                               + "Help them get their hand back in view, or answer what they asked. " + simplest,
                                noun: noun, images: [], effort: .minimal, label: label)
     }
 
