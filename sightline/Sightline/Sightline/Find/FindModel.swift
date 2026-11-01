@@ -461,6 +461,26 @@ final class FindModel {
 
     // MARK: Command
 
+    /// Every listen (branch muse-voice): Muse is biased to the room's things and the target, and the
+    /// find log gets both transcripts (`stt`).
+    private func listenOnce() async throws -> String {
+        var words = Set((room.inventory?.items ?? []).map(\.name) + mapInventory.items.map(\.name))
+        if let targetName { words.insert(targetName) }
+        words.formUnion(["find", "scan the room", "stop", "is this it"])
+        input.keywords = words.sorted()
+        let heard = try await input.listenOnce()
+        log("stt", input.lastReport)
+        return heard
+    }
+
+    /// A/B for the device test: which transcript is used (Muse, or Apple on the device). Saved.
+    var sttEngine: String { SpeechInput.engine.rawValue }
+    func toggleSTTEngine() {
+        SpeechInput.engine = SpeechInput.engine == .muse ? .apple : .muse
+        log("stt_engine", SpeechInput.engine.rawValue)
+        speaker.say(SpeechInput.engine == .muse ? "Listening with Muse." : "Listening on the phone.", interrupt: true)
+    }
+
     private func listen() {
         speaker.stop()
         tones.stop()
@@ -470,7 +490,7 @@ final class FindModel {
         Task {
             try? await Task.sleep(for: .milliseconds(180))  // let the earcon end before the mic opens
             guard id == sessionID, phase == .listening else { return }
-            let heard = (try? await input.listenOnce()) ?? ""
+            let heard = (try? await listenOnce()) ?? ""
             // The input engine may have changed the route: back to the loudspeaker before speaking.
             audio.apply()
             guard id == sessionID else { return }  // long-press reset while listening
@@ -1019,7 +1039,7 @@ final class FindModel {
             }
             tones.earcon(.listening)
             try? await Task.sleep(for: .milliseconds(180))
-            let heard = (try? await input.listenOnce()) ?? ""
+            let heard = (try? await listenOnce()) ?? ""
             audio.apply()
             guard id == sessionID else { return }
             log("which_heard", heard.isEmpty ? "(nothing)" : heard)
@@ -1134,7 +1154,7 @@ final class FindModel {
                 guard id == sessionID, phase == .guiding, palm == nil else { return }
                 tones.earcon(.listening)
                 try? await Task.sleep(for: .milliseconds(180))
-                let heard = (try? await input.listenOnce()) ?? ""
+                let heard = (try? await listenOnce()) ?? ""
                 audio.apply()
                 guard id == sessionID else { return }
                 log("hand_help_heard", heard.isEmpty ? "(nothing)" : heard)
@@ -1290,7 +1310,7 @@ final class FindModel {
                 try? await Task.sleep(for: .milliseconds(100))
             }
             guard id == sessionID, phase == .locating else { return .ended }
-            let answer = (try? await input.listenOnce()) ?? ""
+            let answer = (try? await listenOnce()) ?? ""
             guard id == sessionID, phase == .locating else { return .ended }
             audio.apply()
             log("agent_answer", answer)

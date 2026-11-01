@@ -112,7 +112,7 @@ func runMuseRT(_ clip: Clip, key: String) async -> [String: Any] {
     let ws = URLSession.shared.webSocketTask(with: URL(string: "wss://api.meta.ai/v1/asr/realtime")!)
     ws.resume()
     let hello: [String: Any] = ["authorization": ["accessToken": "Bearer " + key], "audioEncoding": "PCM_24KHZ",
-                                "model": model, "mode": "ENDPOINTING", "keywords": keywords]
+                                "model": model, "mode": "ENDPOINTING", "keywords": keywords, "languageBias": ["English"]]
     let sent = Date()
     do {
         try await ws.send(.string(String(data: try JSONSerialization.data(withJSONObject: hello), encoding: .utf8)!))

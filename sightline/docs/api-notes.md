@@ -129,3 +129,10 @@ v8 (ChatGPT rewrite) collected up to 3 hold observations per check cycle (3 SAM 
 ## Call counts, v9 (2026-10-31)
 
 Each hold check is one photo: 1 SAM call (where the object is now) and 1 Spark call at minimal effort (`verifyHolding`: the photo plus the reference crop from the lock), run in parallel. Any pick-up starts one; at most 6 automatic checks per search, plus double taps; the hold-SAM budget stays 12 per search. All event-triggered. Request shapes, endpoints and models are unchanged; no new real API calls were made for this change.
+
+## Muse Voice Transcribe (2026-11-01, branch muse-voice)
+
+Docs: https://dev.meta.ai/docs/api-reference/voice/realtime, /transcribe, /schemas, /speech-to-text. Pricing $0.18 per audio hour, billed in whole seconds; 256 concurrent streams, 16,000 per hour.
+
+- **Realtime (used by the app, `MuseStream.swift`)**: `wss://api.meta.ai/v1/asr/realtime`. First text frame within 10 s: `{"authorization":{"accessToken":"Bearer <key>"},"audioEncoding":"PCM_24KHZ","model":"muse-voice-transcribe-1.0","mode":"ENDPOINTING","keywords":[...],"languageBias":["English"]}` (keywords and languageBias accepted in the handshake, tested 2026-11-01). The ack is the only frame without `type` and carries `sessionId`. Then binary 16-bit LE mono 24 kHz PCM, 80 ms = 3840 bytes per frame, at real-time pace. Events: `speechStart`, `transcript` {transcript, final}, `speechEnd`, `speechComplete` {turnId, transcript}, `audioProgress` (one per frame), `error`. End with `{"type":"endStream"}` and read until close 1000. Short lines ("Stop", "I'm thirsty") often get no `speechComplete`; see the stop rule in `docs/STT_EXPERIMENT.md`.
+- **File**: `POST https://api.meta.ai/v1/asr/transcribe`, multipart: `request` (JSON `{"model":"muse-voice-transcribe-1.0","audioEncoding":"WAV","mode":"PUSH_TO_TALK","keywords":[...]}`) and `audio` (WAV, mono 16-bit, 16 or 24 kHz, ≤ 10 min, body ≤ 32 MB). Response `{sessionId, transcript, audioDurationMs, turns}`. Repeated words in 35 of 304 test transcripts; not used by the app.

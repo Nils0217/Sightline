@@ -30,6 +30,7 @@ struct FindView: View {
                 .accessibilityAction(named: "Status") { model.speakStatus() }
                 .accessibilityAction(named: "Is this it?") { model.doubleTap() }
                 .accessibilityAction(named: "Measure reach") { model.beginReachCalibration() }
+                .accessibilityAction(named: "Switch speech engine") { model.toggleSTTEngine() }
             VStack(spacing: 8) {
                 panel.allowsHitTesting(false)
                 HStack {
@@ -38,6 +39,7 @@ struct FindView: View {
                     Button("Is this it?", systemImage: "questionmark.circle") { model.doubleTap() }
                         .disabled(![.guiding, .grabbing].contains(model.phase))
                     Button("Reach", systemImage: "ruler") { model.beginReachCalibration() }
+                    Button(model.sttEngine == "muse" ? "Muse" : "Apple", systemImage: "waveform") { model.toggleSTTEngine() }
                 }
                 .buttonStyle(.bordered)
                 .accessibilityHidden(true)  // the same actions are on the main element
