@@ -231,7 +231,8 @@ final class FindModel {
         }
         audio.onReset = { [weak self] in self?.speaker.rebuild(reason: "audio reset") }
         processor.bursts.onBurst = { [weak self] label, frames in
-            Task { @MainActor in self?.saveBurst(label, frames: frames) }
+            guard let model = self else { return }
+            Task { @MainActor in model.saveBurst(label, frames: frames) }
         }
     }
 
