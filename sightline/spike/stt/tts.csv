@@ -1,0 +1,69 @@
+file,id,text,keys,source,voice,accent,condition,speech_end_s,clip_s
+line00__clean.wav,line00,Hold your hand out.,hold your hand,app line,Samantha,US,clean,1.553,2.553
+line00__noise5.wav,line00,Hold your hand out.,hold your hand,app line,Samantha,US,noise5,1.553,2.553
+line01__clean.wav,line01,Checking.,checking,app line,Samantha,US,clean,1.032,2.032
+line01__noise5.wav,line01,Checking.,checking,app line,Samantha,US,noise5,1.032,2.032
+line02__clean.wav,line02,"Forward, 8 centimetres.",forward centimetres,app line,Samantha,US,clean,2.347,3.347
+line02__noise5.wav,line02,"Forward, 8 centimetres.",forward centimetres,app line,Samantha,US,noise5,2.347,3.347
+line03__clean.wav,line03,"Down, 8 centimetres.",down centimetres,app line,Samantha,US,clean,2.108,3.108
+line03__noise5.wav,line03,"Down, 8 centimetres.",down centimetres,app line,Samantha,US,noise5,2.108,3.108
+line04__clean.wav,line04,"Right, 8 centimetres.",right centimetres,app line,Samantha,US,clean,2.109,3.109
+line04__noise5.wav,line04,"Right, 8 centimetres.",right centimetres,app line,Samantha,US,noise5,2.109,3.109
+line05__clean.wav,line05,"Left, 8 centimetres.",left centimetres,app line,Samantha,US,clean,2.164,3.164
+line05__noise5.wav,line05,"Left, 8 centimetres.",left centimetres,app line,Samantha,US,noise5,2.164,3.164
+line06__clean.wav,line06,Turn left slowly. I haven't looked there yet.,turn left slowly,app line,Samantha,US,clean,2.938,3.938
+line06__noise5.wav,line06,Turn left slowly. I haven't looked there yet.,turn left slowly,app line,Samantha,US,noise5,2.938,3.938
+line07__clean.wav,line07,I see your hand.,your hand,app line,Samantha,US,clean,1.472,2.472
+line07__noise5.wav,line07,I see your hand.,your hand,app line,Samantha,US,noise5,1.472,2.472
+line08__clean.wav,line08,"Keep turning right, slowly.",keep turning right,app line,Samantha,US,clean,2.228,3.228
+line08__noise5.wav,line08,"Keep turning right, slowly.",keep turning right,app line,Samantha,US,noise5,2.228,3.228
+line09__clean.wav,line09,One moment.,moment,app line,Samantha,US,clean,1.199,2.199
+line09__noise5.wav,line09,One moment.,moment,app line,Samantha,US,noise5,1.199,2.199
+line10__clean.wav,line10,"Point the phone lower, toward the floor, and turn slowly.",point phone lower,app line,Samantha,US,clean,3.807,4.807
+line10__noise5.wav,line10,"Point the phone lower, toward the floor, and turn slowly.",point phone lower,app line,Samantha,US,noise5,3.807,4.807
+line11__clean.wav,line11,I can't see your hand.,can't your hand,app line,Samantha,US,clean,1.739,2.739
+line11__noise5.wav,line11,I can't see your hand.,can't your hand,app line,Samantha,US,noise5,1.739,2.739
+line12__clean.wav,line12,Not sure. Double tap if you have it.,sure double have,app line,Samantha,US,clean,2.643,3.643
+line12__noise5.wav,line12,Not sure. Double tap if you have it.,sure double have,app line,Samantha,US,noise5,2.643,3.643
+line13__clean.wav,line13,I don't see the sanitizer here. Turn slowly.,don't sanitizer here,app line,Samantha,US,clean,3.352,4.352
+line13__noise5.wav,line13,I don't see the sanitizer here. Turn slowly.,don't sanitizer here,app line,Samantha,US,noise5,3.352,4.352
+line14__clean.wav,line14,Keep going forward.,keep going forward,app line,Samantha,US,clean,1.682,2.682
+line14__noise5.wav,line14,Keep going forward.,keep going forward,app line,Samantha,US,noise5,1.682,2.682
+line15__clean.wav,line15,Stop.,stop,app line,Samantha,US,clean,1.025,2.025
+line15__noise5.wav,line15,Stop.,stop,app line,Samantha,US,noise5,1.025,2.025
+line16__clean.wav,line16,Point the phone a little lower.,point phone little,app line,Samantha,US,clean,1.914,2.914
+line16__noise5.wav,line16,Point the phone a little lower.,point phone little,app line,Samantha,US,noise5,1.914,2.914
+line17__clean.wav,line17,"Found the book. Ahead, a little right, 40 centimetres.",found book ahead,app line,Samantha,US,clean,4.309,5.309
+line17__noise5.wav,line17,"Found the book. Ahead, a little right, 40 centimetres.",found book ahead,app line,Samantha,US,noise5,4.309,5.309
+line18__clean.wav,line18,A book is ahead. Go around it on your right.,book ahead around,app line,Samantha,US,clean,2.923,3.923
+line18__noise5.wav,line18,A book is ahead. Go around it on your right.,book ahead around,app line,Samantha,US,noise5,2.923,3.923
+line19__clean.wav,line19,Okay. You have the book.,okay have book,app line,Samantha,US,clean,2.084,3.084
+line19__noise5.wav,line19,Okay. You have the book.,okay have book,app line,Samantha,US,noise5,2.084,3.084
+line20__clean.wav,line20,Stop. The phone is at your fingers.,stop phone your,app line,Samantha,US,clean,2.662,3.662
+line20__noise5.wav,line20,Stop. The phone is at your fingers.,stop phone your,app line,Samantha,US,noise5,2.662,3.662
+line21__clean.wav,line21,Got it. You have the hand spray.,have hand spray,app line,Samantha,US,clean,2.435,3.435
+line21__noise5.wav,line21,Got it. You have the hand spray.,have hand spray,app line,Samantha,US,noise5,2.435,3.435
+line22__clean.wav,line22,"Turn right, about a quarter turn, toward where I last saw it.",turn right about,app line,Samantha,US,clean,4.192,5.192
+line22__noise5.wav,line22,"Turn right, about a quarter turn, toward where I last saw it.",turn right about,app line,Samantha,US,noise5,4.192,5.192
+line23__clean.wav,line23,Stop. The mug is at your fingers. Feel for the side.,stop your fingers,app line,Samantha,US,clean,3.846,4.846
+line23__noise5.wav,line23,Stop. The mug is at your fingers. Feel for the side.,stop your fingers,app line,Samantha,US,noise5,3.846,4.846
+line24__clean.wav,line24,Keep going down.,keep going down,app line,Samantha,US,clean,1.485,2.485
+line24__noise5.wav,line24,Keep going down.,keep going down,app line,Samantha,US,noise5,1.485,2.485
+line25__clean.wav,line25,A little forward.,little forward,app line,Samantha,US,clean,1.483,2.483
+line25__noise5.wav,line25,A little forward.,little forward,app line,Samantha,US,noise5,1.483,2.483
+line26__clean.wav,line26,Stop. A knife is in the way.,stop knife,app line,Samantha,US,clean,2.36,3.36
+line26__noise5.wav,line26,Stop. A knife is in the way.,stop knife,app line,Samantha,US,noise5,2.36,3.36
+line27__clean.wav,line27,Careful. A bottle is on your left.,careful bottle your,app line,Samantha,US,clean,2.565,3.565
+line27__noise5.wav,line27,Careful. A bottle is on your left.,careful bottle your,app line,Samantha,US,noise5,2.565,3.565
+line28__clean.wav,line28,It's right below your hand.,it's right below,app line,Samantha,US,clean,1.844,2.844
+line28__noise5.wav,line28,It's right below your hand.,it's right below,app line,Samantha,US,noise5,1.844,2.844
+line29__clean.wav,line29,I need to see your hand to guide you.,need your hand,app line,Samantha,US,clean,2.353,3.353
+line29__noise5.wav,line29,I need to see your hand to guide you.,need your hand,app line,Samantha,US,noise5,2.353,3.353
+line30__clean.wav,line30,I'm not sure this is the mug.,sure this,app line,Samantha,US,clean,1.971,2.971
+line30__noise5.wav,line30,I'm not sure this is the mug.,sure this,app line,Samantha,US,noise5,1.971,2.971
+line31__clean.wav,line31,I couldn't check for danger. Go slowly.,couldn't check danger,app line,Samantha,US,clean,2.865,3.865
+line31__noise5.wav,line31,I couldn't check for danger. Go slowly.,couldn't check danger,app line,Samantha,US,noise5,2.865,3.865
+line32__clean.wav,line32,The mug is still there.,still there,app line,Samantha,US,clean,1.522,2.522
+line32__noise5.wav,line32,The mug is still there.,still there,app line,Samantha,US,noise5,1.522,2.522
+line33__clean.wav,line33,Lift your hand over it.,lift your hand,app line,Samantha,US,clean,1.747,2.747
+line33__noise5.wav,line33,Lift your hand over it.,lift your hand,app line,Samantha,US,noise5,1.747,2.747

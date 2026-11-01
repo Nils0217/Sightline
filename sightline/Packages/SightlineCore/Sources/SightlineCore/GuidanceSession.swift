@@ -148,7 +148,17 @@ public struct GuidanceSession: Sendable {
     /// "Not sure." was said then (the check could not tell).
     private var unsureAt: Double?
     private var unsureReminded = false
+    /// OBSOLETE since the case-2 flow (2026-11-01): the "Double tap if you have it." reminder is gone;
+    /// a held-up check follows "I can't tell. Hold it up to the camera." instead. Kept for the record.
     public var unsureRemind: Double = 6
+    /// Case 2 (Nils, 2026-11-01): the user holds something and asks "Is this it?" (double tap, or voice).
+    /// The answer is "Yes. That's the X." / "No. The X is still there." The user who is sure just closes
+    /// the app (case 1), so nothing asks for an "I have it".
+    private var asked = false
+    /// "I can't tell. Hold it up to the camera." was said in this search (once); a check follows after `showWait`.
+    private var heldUpAsked = false
+    private var heldUpDue: Double?
+    public var showWait: Double = 3
     private var lastObstacleWarning: Double = -.infinity
     /// Grasp history while grabbing.
     /// Kept for the log/overlay; the leave decision no longer depends on it (see header).
@@ -182,7 +192,7 @@ public struct GuidanceSession: Sendable {
     /// After a stall, directions repeat no sooner than this.
     private var quietUntil: Double = -.infinity
     public var stallQuiet: Double = 6
-    /// "Double tap if you have it." after repeated "Keep going", once per search.
+    /// "Double tap to check it." after repeated "Keep going", once per search.
     private var stallHintSaid = false
     /// A check ran since the last "Grab it": going back to guiding must not re-arm the leave check.
     private var checkedSinceGrab = false
@@ -251,8 +261,10 @@ public struct GuidanceSession: Sendable {
     /// The app gave up waiting for a check (no photo, or the calls timed out): same as "could not tell".
     public mutating func checkTimedOut(time: Double) -> [SpokenLine] { resolveCheck(nil, time: time) }
 
-    /// A double tap ("I have it") uses the same check as the automatic ones.
+    /// A double tap or a spoken "Is this it?" uses the same check as the automatic ones; only the answer
+    /// is worded as a reply.
     public mutating func beginManualCheck() {
+        asked = true
         phase = .checking
         clearContact()
         fingerHistory.removeAll()
@@ -261,11 +273,13 @@ public struct GuidanceSession: Sendable {
     /// Answer to `requestCheck`: true = holding it, false = not it, nil = could not tell.
     public mutating func resolveCheck(_ ok: Bool?, time: Double) -> [SpokenLine] {
         guard phase == .checking else { return [] }
+        let wasAsked = asked
+        asked = false
         switch ok {
         case true?:
             stillThereStreak = 0
             phase = .done
-            return [SpokenLine(text: "Got it. You have the \(targetName).", interrupt: true)]
+            return [SpokenLine(text: wasAsked ? "Yes. That's the \(targetName)." : "Got it. You have the \(targetName).", interrupt: true)]
         case false?:
             stillThereStreak += 1
             // HoldDecision says false only when SAM still sees it where it was: guide again from here
@@ -274,7 +288,7 @@ public struct GuidanceSession: Sendable {
             resetGrasp()
             guide.release()
             lastHandSeen = time  // the check took a while: no "I can't see your hand." over this line
-            return [SpokenLine(text: "The \(targetName) is still there.", interrupt: true)]
+            return [SpokenLine(text: (wasAsked ? "No. The " : "The ") + "\(targetName) is still there.", interrupt: true)]
         case nil:
             stillThereStreak = 0
             phase = .grabbing
@@ -283,7 +297,14 @@ public struct GuidanceSession: Sendable {
             unsureAt = time
             unsureReminded = false
             clearContact()  // the hand must come back to the object before the next automatic check
-            return [SpokenLine(text: "Not sure. Double tap if you have it.", interrupt: true)]
+            // Something the user can do (Nils: no vague lines): show it to the camera, then one more look.
+            if !heldUpAsked {
+                heldUpAsked = true
+                heldUpDue = time + showWait
+                return [SpokenLine(text: "I can't tell. Hold it up to the camera.", interrupt: true)]
+            }
+            heldUpDue = nil
+            return [SpokenLine(text: "I still can't tell. It may be the \(targetName).", interrupt: true)]
         }
     }
 
@@ -661,7 +682,7 @@ public struct GuidanceSession: Sendable {
                         if autoChecks < maxAutoChecks, stillThereStreak < 2 { return check(&out, "stalled") }
                         if !stallHintSaid {
                             stallHintSaid = true
-                            out.lines.append(SpokenLine(text: "Double tap if you have it.", interrupt: false))
+                            out.lines.append(SpokenLine(text: "Double tap to check it.", interrupt: false))
                         }
                         break
                     }
@@ -680,15 +701,23 @@ public struct GuidanceSession: Sendable {
                 if grasp.touching { touched = true; graspPalm = ref ?? graspPalm }
                 if grasp.opposed { opposed = true; graspPalm = ref ?? graspPalm }
             }
+            // Held up to the camera: one more look after `showWait`, outside the automatic budget. The hand
+            // is away from the spot on purpose, so leaving or rising does not count until then.
+            if let due = heldUpDue {
+                if time >= due {
+                    heldUpDue = nil
+                    return check(&out, "held_up", force: true)
+                }
+                return out
+            }
             if let hand, let away = fingerDistance(hand, goal: goal) {
                 recordFinger(away, time: time)
                 if heldNear { cameNear = true }
                 if cameNear, heldAway, grasp?.touching != true { return check(&out, "left_object") }
                 if rose(hand, time: time) { return check(&out, "near_then_rose") }
             }
-            // After "Not sure.": the hand went away from the object -> guide again at once; else one reminder
-            // after `unsureRemind` s (v9.2, Nils: 6 s; T11 left up to 20 s of silence after "Not sure.").
-            if let at = unsureAt {
+            // After "I still can't tell.": the hand went away from the object -> guide again at once.
+            if unsureAt != nil {
                 if heldAway {
                     unsureAt = nil
                     phase = .guiding
@@ -697,10 +726,6 @@ public struct GuidanceSession: Sendable {
                     lastGuideLine = time
                     out.phase = phase
                     return out
-                }
-                if !unsureReminded, time - at >= unsureRemind, !speaking {
-                    unsureReminded = true
-                    out.lines.append(SpokenLine(text: "Double tap if you have it.", interrupt: false))
                 }
             }
             let since = grabbingSince ?? time
@@ -951,16 +976,16 @@ public struct GuidanceSession: Sendable {
         obstacles = map
     }
 
-    private mutating func check(_ out: inout GuidanceOutput, _ reason: String) -> GuidanceOutput {
+    private mutating func check(_ out: inout GuidanceOutput, _ reason: String, force: Bool = false) -> GuidanceOutput {
         clearContact()
         fingerHistory.removeAll()
         keepGoing = 0
         // Twice in a row "still there": the next pick-up is likely the same wrong thing. Stop the
         // check-and-guide-again cycle (sim wrong_object: six rounds of the same four lines).
-        guard autoChecks < maxAutoChecks, stillThereStreak < 2 else {
+        guard force || (autoChecks < maxAutoChecks && stillThereStreak < 2) else {
             if !tapOnlySaid {
                 tapOnlySaid = true
-                out.lines.append(SpokenLine(text: "Double tap if you have it.", interrupt: false))
+                out.lines.append(SpokenLine(text: "Double tap to check it.", interrupt: false))
             }
             out.phase = phase
             return out
@@ -1054,6 +1079,7 @@ public struct GuidanceSession: Sendable {
 
     private mutating func resetGrasp() {
         unsureAt = nil
+        heldUpDue = nil  // heldUpAsked stays: "Hold it up" once per search, never a hold-up loop
         goalShift = .zero
         touched = false
         opposed = false

@@ -96,4 +96,13 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `spike/requirements.txt` | spike, config | Python deps for the spike |
 | `spike/images/README.md` | spike, testing | Where to put the 5 test photos |
 | `spike/out/` (not in git) | generated | Mask overlay PNGs |
+| `spike/stt/make_corpus.py` | spike, needs-review | STT corpus: past test lines x 4 voices x clean / noise / pause / quiet |
+| `spike/stt/make_tts_corpus.py` | spike, needs-review | Round trip of the app's own spoken lines |
+| `spike/stt/stt_bench.swift` | spike, needs-review, sensitive | Apple on-device vs Muse Voice Transcribe (realtime, file); reads the API key |
+| `spike/stt/Info.plist` | spike, config | Speech permission text for the bench binary |
+| `spike/stt/analyze.py` | spike, needs-review | Scores the bench output with the app's stop rules |
+| `spike/stt/corpus.csv`, `tts.csv` | spike, generated | Clip list with reference text |
+| `spike/stt/results/` | spike, generated | Bench output, `summary.md`, `scored.csv` |
+| `spike/stt/corpus/`, `tts/` (not in git) | generated | WAV clips |
+| `docs/STT_EXPERIMENT.md` | reference, needs-review | Apple vs Muse Voice Transcribe results and recommendation |
 | `logs/api_calls.csv` (not in git) | generated | Latency and cost log of every API call |

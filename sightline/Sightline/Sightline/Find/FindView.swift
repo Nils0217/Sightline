@@ -1,6 +1,6 @@
 // labels: production, needs-review
 // One screen, three gestures (v9, 2026-10-31): tap = start / stop (finish a room scan), double tap =
-// "I have it", long press = measure reach. VoiceOver: activate = double tap's action, magic tap = tap,
+// "Is this it?" (case 2, 2026-11-01), long press = measure reach. VoiceOver: activate = double tap's action, magic tap = tap,
 // named actions for the rest. Small buttons are for a sighted helper. Camera dots stay hidden from VoiceOver.
 
 import ARKit
@@ -22,20 +22,20 @@ struct FindView: View {
                 .accessibilityLabel(buttonLabel)
                 .accessibilityValue(model.statusLine())
                 .accessibilityHint("Two-finger double tap to start or stop.")
-                // VoiceOver's double tap means the same as a double tap without VoiceOver ("I have it"),
+                // VoiceOver's double tap means the same as a double tap without VoiceOver ("Is this it?"),
                 // so the spoken "Double tap if you have it" holds either way.
                 .accessibilityAction { model.doubleTap() }
                 .accessibilityAction(.magicTap) { model.tap() }
                 .accessibilityAction(named: "Stop") { model.stop() }
                 .accessibilityAction(named: "Status") { model.speakStatus() }
-                .accessibilityAction(named: "I have it") { model.doubleTap() }
+                .accessibilityAction(named: "Is this it?") { model.doubleTap() }
                 .accessibilityAction(named: "Measure reach") { model.beginReachCalibration() }
             VStack(spacing: 8) {
                 panel.allowsHitTesting(false)
                 HStack {
                     Button("Stop", systemImage: "stop.fill") { model.stop() }
                     Button("Status", systemImage: "speaker.wave.2") { model.speakStatus() }
-                    Button("I have it", systemImage: "hand.raised.fill") { model.doubleTap() }
+                    Button("Is this it?", systemImage: "questionmark.circle") { model.doubleTap() }
                         .disabled(![.guiding, .grabbing].contains(model.phase))
                     Button("Reach", systemImage: "ruler") { model.beginReachCalibration() }
                 }
@@ -57,7 +57,7 @@ struct FindView: View {
     private var panel: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(headline).font(.title3.bold())
-            Text("tap = start / stop · double tap = I have it · hold = measure reach").foregroundStyle(.secondary)
+            Text("tap = start / stop · double tap = is this it? · hold = measure reach").foregroundStyle(.secondary)
             Text("reach \(model.reachDistance.map { "\(Int($0 * 100)) cm" } ?? "not measured")  heard \"\(model.lastHeard)\"")
             Text("target \(model.targetName ?? "-")  SAM \(model.samCalls)/\(FindModel.maxSAMCalls)  tracking \(model.tracking)")
             Text("hand \(model.handStatus)  hand→target \(model.handDistance.map { String(format: "%.1f cm", $0 * 100) } ?? "-")  guide \(model.guidePhase)")

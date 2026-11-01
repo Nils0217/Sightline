@@ -1,0 +1,305 @@
+file,id,text,keys,source,voice,accent,condition,speech_end_s,clip_s
+cmd_phone__Samantha__clean.wav,cmd_phone,I want my phone,phone,V6 log,Samantha,US,clean,1.553,4.553
+cmd_phone__Samantha__noise.wav,cmd_phone,I want my phone,phone,V6 log,Samantha,US,noise,1.553,4.553
+cmd_phone__Samantha__quiet.wav,cmd_phone,I want my phone,phone,V6 log,Samantha,US,quiet,1.553,4.553
+cmd_phone__Daniel__clean.wav,cmd_phone,I want my phone,phone,V6 log,Daniel,GB,clean,1.656,4.656
+cmd_phone__Daniel__noise.wav,cmd_phone,I want my phone,phone,V6 log,Daniel,GB,noise,1.656,4.656
+cmd_phone__Daniel__quiet.wav,cmd_phone,I want my phone,phone,V6 log,Daniel,GB,quiet,1.656,4.656
+cmd_phone__Rishi__clean.wav,cmd_phone,I want my phone,phone,V6 log,Rishi,IN,clean,1.663,4.663
+cmd_phone__Rishi__noise.wav,cmd_phone,I want my phone,phone,V6 log,Rishi,IN,noise,1.663,4.663
+cmd_phone__Rishi__quiet.wav,cmd_phone,I want my phone,phone,V6 log,Rishi,IN,quiet,1.663,4.663
+cmd_phone__Meijia__clean.wav,cmd_phone,I want my phone,phone,V6 log,Meijia,zh-TW reading English,clean,1.926,4.926
+cmd_phone__Meijia__noise.wav,cmd_phone,I want my phone,phone,V6 log,Meijia,zh-TW reading English,noise,1.926,4.926
+cmd_phone__Meijia__quiet.wav,cmd_phone,I want my phone,phone,V6 log,Meijia,zh-TW reading English,quiet,1.926,4.926
+cmd_thirsty__Samantha__clean.wav,cmd_thirsty,I'm thirsty,thirsty,V6 log,Samantha,US,clean,1.262,4.262
+cmd_thirsty__Samantha__noise.wav,cmd_thirsty,I'm thirsty,thirsty,V6 log,Samantha,US,noise,1.262,4.262
+cmd_thirsty__Samantha__quiet.wav,cmd_thirsty,I'm thirsty,thirsty,V6 log,Samantha,US,quiet,1.262,4.262
+cmd_thirsty__Daniel__clean.wav,cmd_thirsty,I'm thirsty,thirsty,V6 log,Daniel,GB,clean,1.351,4.351
+cmd_thirsty__Daniel__noise.wav,cmd_thirsty,I'm thirsty,thirsty,V6 log,Daniel,GB,noise,1.351,4.351
+cmd_thirsty__Daniel__quiet.wav,cmd_thirsty,I'm thirsty,thirsty,V6 log,Daniel,GB,quiet,1.351,4.351
+cmd_thirsty__Rishi__clean.wav,cmd_thirsty,I'm thirsty,thirsty,V6 log,Rishi,IN,clean,1.326,4.326
+cmd_thirsty__Rishi__noise.wav,cmd_thirsty,I'm thirsty,thirsty,V6 log,Rishi,IN,noise,1.326,4.326
+cmd_thirsty__Rishi__quiet.wav,cmd_thirsty,I'm thirsty,thirsty,V6 log,Rishi,IN,quiet,1.326,4.326
+cmd_thirsty__Meijia__clean.wav,cmd_thirsty,I'm thirsty,thirsty,V6 log,Meijia,zh-TW reading English,clean,1.542,4.542
+cmd_thirsty__Meijia__noise.wav,cmd_thirsty,I'm thirsty,thirsty,V6 log,Meijia,zh-TW reading English,noise,1.542,4.542
+cmd_thirsty__Meijia__quiet.wav,cmd_thirsty,I'm thirsty,thirsty,V6 log,Meijia,zh-TW reading English,quiet,1.542,4.542
+cmd_green__Samantha__clean.wav,cmd_green,The green liquid,green liquid,V6 log,Samantha,US,clean,1.394,4.394
+cmd_green__Samantha__noise.wav,cmd_green,The green liquid,green liquid,V6 log,Samantha,US,noise,1.394,4.394
+cmd_green__Samantha__quiet.wav,cmd_green,The green liquid,green liquid,V6 log,Samantha,US,quiet,1.394,4.394
+cmd_green__Daniel__clean.wav,cmd_green,The green liquid,green liquid,V6 log,Daniel,GB,clean,1.51,4.51
+cmd_green__Daniel__noise.wav,cmd_green,The green liquid,green liquid,V6 log,Daniel,GB,noise,1.51,4.51
+cmd_green__Daniel__quiet.wav,cmd_green,The green liquid,green liquid,V6 log,Daniel,GB,quiet,1.51,4.51
+cmd_green__Rishi__clean.wav,cmd_green,The green liquid,green liquid,V6 log,Rishi,IN,clean,1.542,4.542
+cmd_green__Rishi__noise.wav,cmd_green,The green liquid,green liquid,V6 log,Rishi,IN,noise,1.542,4.542
+cmd_green__Rishi__quiet.wav,cmd_green,The green liquid,green liquid,V6 log,Rishi,IN,quiet,1.542,4.542
+cmd_green__Meijia__clean.wav,cmd_green,The green liquid,green liquid,V6 log,Meijia,zh-TW reading English,clean,1.995,4.995
+cmd_green__Meijia__noise.wav,cmd_green,The green liquid,green liquid,V6 log,Meijia,zh-TW reading English,noise,1.995,4.995
+cmd_green__Meijia__quiet.wav,cmd_green,The green liquid,green liquid,V6 log,Meijia,zh-TW reading English,quiet,1.995,4.995
+cmd_key__Samantha__clean.wav,cmd_key,Where is my key,key,V6/V9.1.3 log,Samantha,US,clean,1.431,4.431
+cmd_key__Samantha__noise.wav,cmd_key,Where is my key,key,V6/V9.1.3 log,Samantha,US,noise,1.431,4.431
+cmd_key__Samantha__quiet.wav,cmd_key,Where is my key,key,V6/V9.1.3 log,Samantha,US,quiet,1.431,4.431
+cmd_key__Daniel__clean.wav,cmd_key,Where is my key,key,V6/V9.1.3 log,Daniel,GB,clean,1.559,4.559
+cmd_key__Daniel__noise.wav,cmd_key,Where is my key,key,V6/V9.1.3 log,Daniel,GB,noise,1.559,4.559
+cmd_key__Daniel__quiet.wav,cmd_key,Where is my key,key,V6/V9.1.3 log,Daniel,GB,quiet,1.559,4.559
+cmd_key__Rishi__clean.wav,cmd_key,Where is my key,key,V6/V9.1.3 log,Rishi,IN,clean,1.542,4.542
+cmd_key__Rishi__noise.wav,cmd_key,Where is my key,key,V6/V9.1.3 log,Rishi,IN,noise,1.542,4.542
+cmd_key__Rishi__quiet.wav,cmd_key,Where is my key,key,V6/V9.1.3 log,Rishi,IN,quiet,1.542,4.542
+cmd_key__Meijia__clean.wav,cmd_key,Where is my key,key,V6/V9.1.3 log,Meijia,zh-TW reading English,clean,1.832,4.832
+cmd_key__Meijia__noise.wav,cmd_key,Where is my key,key,V6/V9.1.3 log,Meijia,zh-TW reading English,noise,1.832,4.832
+cmd_key__Meijia__quiet.wav,cmd_key,Where is my key,key,V6/V9.1.3 log,Meijia,zh-TW reading English,quiet,1.832,4.832
+cmd_book__Samantha__clean.wav,cmd_book,Can you help me find my book,book,v7 log,Samantha,US,clean,2.16,5.16
+cmd_book__Samantha__noise.wav,cmd_book,Can you help me find my book,book,v7 log,Samantha,US,noise,2.16,5.16
+cmd_book__Samantha__pause.wav,cmd_book,Can you help me find my book,book,v7 log,Samantha,US,pause,4.338,7.338
+cmd_book__Samantha__quiet.wav,cmd_book,Can you help me find my book,book,v7 log,Samantha,US,quiet,2.16,5.16
+cmd_book__Daniel__clean.wav,cmd_book,Can you help me find my book,book,v7 log,Daniel,GB,clean,2.255,5.255
+cmd_book__Daniel__noise.wav,cmd_book,Can you help me find my book,book,v7 log,Daniel,GB,noise,2.255,5.255
+cmd_book__Daniel__pause.wav,cmd_book,Can you help me find my book,book,v7 log,Daniel,GB,pause,4.466,7.466
+cmd_book__Daniel__quiet.wav,cmd_book,Can you help me find my book,book,v7 log,Daniel,GB,quiet,2.255,5.255
+cmd_book__Rishi__clean.wav,cmd_book,Can you help me find my book,book,v7 log,Rishi,IN,clean,2.388,5.388
+cmd_book__Rishi__noise.wav,cmd_book,Can you help me find my book,book,v7 log,Rishi,IN,noise,2.388,5.388
+cmd_book__Rishi__pause.wav,cmd_book,Can you help me find my book,book,v7 log,Rishi,IN,pause,4.548,7.548
+cmd_book__Rishi__quiet.wav,cmd_book,Can you help me find my book,book,v7 log,Rishi,IN,quiet,2.388,5.388
+cmd_book__Meijia__clean.wav,cmd_book,Can you help me find my book,book,v7 log,Meijia,zh-TW reading English,clean,3.24,6.24
+cmd_book__Meijia__noise.wav,cmd_book,Can you help me find my book,book,v7 log,Meijia,zh-TW reading English,noise,3.24,6.24
+cmd_book__Meijia__pause.wav,cmd_book,Can you help me find my book,book,v7 log,Meijia,zh-TW reading English,pause,5.284,8.284
+cmd_book__Meijia__quiet.wav,cmd_book,Can you help me find my book,book,v7 log,Meijia,zh-TW reading English,quiet,3.24,6.24
+cmd_ohphone__Samantha__clean.wav,cmd_ohphone,Oh my phone,phone,v7 log,Samantha,US,clean,1.365,4.365
+cmd_ohphone__Samantha__noise.wav,cmd_ohphone,Oh my phone,phone,v7 log,Samantha,US,noise,1.365,4.365
+cmd_ohphone__Samantha__quiet.wav,cmd_ohphone,Oh my phone,phone,v7 log,Samantha,US,quiet,1.365,4.365
+cmd_ohphone__Daniel__clean.wav,cmd_ohphone,Oh my phone,phone,v7 log,Daniel,GB,clean,1.355,4.355
+cmd_ohphone__Daniel__noise.wav,cmd_ohphone,Oh my phone,phone,v7 log,Daniel,GB,noise,1.355,4.355
+cmd_ohphone__Daniel__quiet.wav,cmd_ohphone,Oh my phone,phone,v7 log,Daniel,GB,quiet,1.355,4.355
+cmd_ohphone__Rishi__clean.wav,cmd_ohphone,Oh my phone,phone,v7 log,Rishi,IN,clean,1.477,4.477
+cmd_ohphone__Rishi__noise.wav,cmd_ohphone,Oh my phone,phone,v7 log,Rishi,IN,noise,1.477,4.477
+cmd_ohphone__Rishi__quiet.wav,cmd_ohphone,Oh my phone,phone,v7 log,Rishi,IN,quiet,1.477,4.477
+cmd_ohphone__Meijia__clean.wav,cmd_ohphone,Oh my phone,phone,v7 log,Meijia,zh-TW reading English,clean,1.51,4.51
+cmd_ohphone__Meijia__noise.wav,cmd_ohphone,Oh my phone,phone,v7 log,Meijia,zh-TW reading English,noise,1.51,4.51
+cmd_ohphone__Meijia__quiet.wav,cmd_ohphone,Oh my phone,phone,v7 log,Meijia,zh-TW reading English,quiet,1.51,4.51
+cmd_sanitizer__Samantha__clean.wav,cmd_sanitizer,Can you help me find my sanitizer,sanitizer,V9.1.3 log,Samantha,US,clean,2.671,5.671
+cmd_sanitizer__Samantha__noise.wav,cmd_sanitizer,Can you help me find my sanitizer,sanitizer,V9.1.3 log,Samantha,US,noise,2.671,5.671
+cmd_sanitizer__Samantha__pause.wav,cmd_sanitizer,Can you help me find my sanitizer,sanitizer,V9.1.3 log,Samantha,US,pause,4.861,7.861
+cmd_sanitizer__Samantha__quiet.wav,cmd_sanitizer,Can you help me find my sanitizer,sanitizer,V9.1.3 log,Samantha,US,quiet,2.671,5.671
+cmd_sanitizer__Daniel__clean.wav,cmd_sanitizer,Can you help me find my sanitizer,sanitizer,V9.1.3 log,Daniel,GB,clean,2.708,5.708
+cmd_sanitizer__Daniel__noise.wav,cmd_sanitizer,Can you help me find my sanitizer,sanitizer,V9.1.3 log,Daniel,GB,noise,2.708,5.708
+cmd_sanitizer__Daniel__pause.wav,cmd_sanitizer,Can you help me find my sanitizer,sanitizer,V9.1.3 log,Daniel,GB,pause,4.919,7.919
+cmd_sanitizer__Daniel__quiet.wav,cmd_sanitizer,Can you help me find my sanitizer,sanitizer,V9.1.3 log,Daniel,GB,quiet,2.708,5.708
+cmd_sanitizer__Rishi__clean.wav,cmd_sanitizer,Can you help me find my sanitizer,sanitizer,V9.1.3 log,Rishi,IN,clean,2.806,5.806
+cmd_sanitizer__Rishi__noise.wav,cmd_sanitizer,Can you help me find my sanitizer,sanitizer,V9.1.3 log,Rishi,IN,noise,2.806,5.806
+cmd_sanitizer__Rishi__pause.wav,cmd_sanitizer,Can you help me find my sanitizer,sanitizer,V9.1.3 log,Rishi,IN,pause,4.966,7.966
+cmd_sanitizer__Rishi__quiet.wav,cmd_sanitizer,Can you help me find my sanitizer,sanitizer,V9.1.3 log,Rishi,IN,quiet,2.806,5.806
+cmd_sanitizer__Meijia__clean.wav,cmd_sanitizer,Can you help me find my sanitizer,sanitizer,V9.1.3 log,Meijia,zh-TW reading English,clean,3.844,6.844
+cmd_sanitizer__Meijia__noise.wav,cmd_sanitizer,Can you help me find my sanitizer,sanitizer,V9.1.3 log,Meijia,zh-TW reading English,noise,3.844,6.844
+cmd_sanitizer__Meijia__pause.wav,cmd_sanitizer,Can you help me find my sanitizer,sanitizer,V9.1.3 log,Meijia,zh-TW reading English,pause,6.015,9.015
+cmd_sanitizer__Meijia__quiet.wav,cmd_sanitizer,Can you help me find my sanitizer,sanitizer,V9.1.3 log,Meijia,zh-TW reading English,quiet,3.844,6.844
+cmd_spray__Samantha__clean.wav,cmd_spray,Can you find a hand spray for me,hand spray,V9.1.3 log,Samantha,US,clean,2.311,5.311
+cmd_spray__Samantha__noise.wav,cmd_spray,Can you find a hand spray for me,hand spray,V9.1.3 log,Samantha,US,noise,2.311,5.311
+cmd_spray__Samantha__pause.wav,cmd_spray,Can you find a hand spray for me,hand spray,V9.1.3 log,Samantha,US,pause,4.528,7.528
+cmd_spray__Samantha__quiet.wav,cmd_spray,Can you find a hand spray for me,hand spray,V9.1.3 log,Samantha,US,quiet,2.311,5.311
+cmd_spray__Daniel__clean.wav,cmd_spray,Can you find a hand spray for me,hand spray,V9.1.3 log,Daniel,GB,clean,2.51,5.51
+cmd_spray__Daniel__noise.wav,cmd_spray,Can you find a hand spray for me,hand spray,V9.1.3 log,Daniel,GB,noise,2.51,5.51
+cmd_spray__Daniel__pause.wav,cmd_spray,Can you find a hand spray for me,hand spray,V9.1.3 log,Daniel,GB,pause,4.769,7.769
+cmd_spray__Daniel__quiet.wav,cmd_spray,Can you find a hand spray for me,hand spray,V9.1.3 log,Daniel,GB,quiet,2.51,5.51
+cmd_spray__Rishi__clean.wav,cmd_spray,Can you find a hand spray for me,hand spray,V9.1.3 log,Rishi,IN,clean,2.551,5.551
+cmd_spray__Rishi__noise.wav,cmd_spray,Can you find a hand spray for me,hand spray,V9.1.3 log,Rishi,IN,noise,2.551,5.551
+cmd_spray__Rishi__pause.wav,cmd_spray,Can you find a hand spray for me,hand spray,V9.1.3 log,Rishi,IN,pause,4.711,7.711
+cmd_spray__Rishi__quiet.wav,cmd_spray,Can you find a hand spray for me,hand spray,V9.1.3 log,Rishi,IN,quiet,2.551,5.551
+cmd_spray__Meijia__clean.wav,cmd_spray,Can you find a hand spray for me,hand spray,V9.1.3 log,Meijia,zh-TW reading English,clean,3.484,6.484
+cmd_spray__Meijia__noise.wav,cmd_spray,Can you find a hand spray for me,hand spray,V9.1.3 log,Meijia,zh-TW reading English,noise,3.484,6.484
+cmd_spray__Meijia__pause.wav,cmd_spray,Can you find a hand spray for me,hand spray,V9.1.3 log,Meijia,zh-TW reading English,pause,5.436,8.436
+cmd_spray__Meijia__quiet.wav,cmd_spray,Can you find a hand spray for me,hand spray,V9.1.3 log,Meijia,zh-TW reading English,quiet,3.484,6.484
+cmd_scan__Samantha__clean.wav,cmd_scan,Scan the room,scan room,V9.1.3 log,Samantha,US,clean,1.339,4.339
+cmd_scan__Samantha__noise.wav,cmd_scan,Scan the room,scan room,V9.1.3 log,Samantha,US,noise,1.339,4.339
+cmd_scan__Samantha__quiet.wav,cmd_scan,Scan the room,scan room,V9.1.3 log,Samantha,US,quiet,1.339,4.339
+cmd_scan__Daniel__clean.wav,cmd_scan,Scan the room,scan room,V9.1.3 log,Daniel,GB,clean,1.476,4.476
+cmd_scan__Daniel__noise.wav,cmd_scan,Scan the room,scan room,V9.1.3 log,Daniel,GB,noise,1.476,4.476
+cmd_scan__Daniel__quiet.wav,cmd_scan,Scan the room,scan room,V9.1.3 log,Daniel,GB,quiet,1.476,4.476
+cmd_scan__Rishi__clean.wav,cmd_scan,Scan the room,scan room,V9.1.3 log,Rishi,IN,clean,1.366,4.366
+cmd_scan__Rishi__noise.wav,cmd_scan,Scan the room,scan room,V9.1.3 log,Rishi,IN,noise,1.366,4.366
+cmd_scan__Rishi__quiet.wav,cmd_scan,Scan the room,scan room,V9.1.3 log,Rishi,IN,quiet,1.366,4.366
+cmd_scan__Meijia__clean.wav,cmd_scan,Scan the room,scan room,V9.1.3 log,Meijia,zh-TW reading English,clean,1.542,4.542
+cmd_scan__Meijia__noise.wav,cmd_scan,Scan the room,scan room,V9.1.3 log,Meijia,zh-TW reading English,noise,1.542,4.542
+cmd_scan__Meijia__quiet.wav,cmd_scan,Scan the room,scan room,V9.1.3 log,Meijia,zh-TW reading English,quiet,1.542,4.542
+cmd_hairdryer__Samantha__clean.wav,cmd_hairdryer,Do you know where is my hairdryer,hairdryer,V9.1.3 log,Samantha,US,clean,2.384,5.384
+cmd_hairdryer__Samantha__noise.wav,cmd_hairdryer,Do you know where is my hairdryer,hairdryer,V9.1.3 log,Samantha,US,noise,2.384,5.384
+cmd_hairdryer__Samantha__pause.wav,cmd_hairdryer,Do you know where is my hairdryer,hairdryer,V9.1.3 log,Samantha,US,pause,4.567,7.567
+cmd_hairdryer__Samantha__quiet.wav,cmd_hairdryer,Do you know where is my hairdryer,hairdryer,V9.1.3 log,Samantha,US,quiet,2.384,5.384
+cmd_hairdryer__Daniel__clean.wav,cmd_hairdryer,Do you know where is my hairdryer,hairdryer,V9.1.3 log,Daniel,GB,clean,2.314,5.314
+cmd_hairdryer__Daniel__noise.wav,cmd_hairdryer,Do you know where is my hairdryer,hairdryer,V9.1.3 log,Daniel,GB,noise,2.314,5.314
+cmd_hairdryer__Daniel__pause.wav,cmd_hairdryer,Do you know where is my hairdryer,hairdryer,V9.1.3 log,Daniel,GB,pause,4.468,7.468
+cmd_hairdryer__Daniel__quiet.wav,cmd_hairdryer,Do you know where is my hairdryer,hairdryer,V9.1.3 log,Daniel,GB,quiet,2.314,5.314
+cmd_hairdryer__Rishi__clean.wav,cmd_hairdryer,Do you know where is my hairdryer,hairdryer,V9.1.3 log,Rishi,IN,clean,2.692,5.692
+cmd_hairdryer__Rishi__noise.wav,cmd_hairdryer,Do you know where is my hairdryer,hairdryer,V9.1.3 log,Rishi,IN,noise,2.692,5.692
+cmd_hairdryer__Rishi__pause.wav,cmd_hairdryer,Do you know where is my hairdryer,hairdryer,V9.1.3 log,Rishi,IN,pause,4.955,7.955
+cmd_hairdryer__Rishi__quiet.wav,cmd_hairdryer,Do you know where is my hairdryer,hairdryer,V9.1.3 log,Rishi,IN,quiet,2.692,5.692
+cmd_hairdryer__Meijia__clean.wav,cmd_hairdryer,Do you know where is my hairdryer,hairdryer,V9.1.3 log,Meijia,zh-TW reading English,clean,3.334,6.334
+cmd_hairdryer__Meijia__noise.wav,cmd_hairdryer,Do you know where is my hairdryer,hairdryer,V9.1.3 log,Meijia,zh-TW reading English,noise,3.334,6.334
+cmd_hairdryer__Meijia__pause.wav,cmd_hairdryer,Do you know where is my hairdryer,hairdryer,V9.1.3 log,Meijia,zh-TW reading English,pause,5.226,8.226
+cmd_hairdryer__Meijia__quiet.wav,cmd_hairdryer,Do you know where is my hairdryer,hairdryer,V9.1.3 log,Meijia,zh-TW reading English,quiet,3.334,6.334
+cmd_remember__Samantha__clean.wav,cmd_remember,"You said you remember 55 things in my room, what did you remember",remember room,V9.1.3 log,Samantha,US,clean,4.347,7.347
+cmd_remember__Samantha__noise.wav,cmd_remember,"You said you remember 55 things in my room, what did you remember",remember room,V9.1.3 log,Samantha,US,noise,4.347,7.347
+cmd_remember__Samantha__pause.wav,cmd_remember,"You said you remember 55 things in my room, what did you remember",remember room,V9.1.3 log,Samantha,US,pause,6.572,9.572
+cmd_remember__Samantha__quiet.wav,cmd_remember,"You said you remember 55 things in my room, what did you remember",remember room,V9.1.3 log,Samantha,US,quiet,4.347,7.347
+cmd_remember__Daniel__clean.wav,cmd_remember,"You said you remember 55 things in my room, what did you remember",remember room,V9.1.3 log,Daniel,GB,clean,4.646,7.646
+cmd_remember__Daniel__noise.wav,cmd_remember,"You said you remember 55 things in my room, what did you remember",remember room,V9.1.3 log,Daniel,GB,noise,4.646,7.646
+cmd_remember__Daniel__pause.wav,cmd_remember,"You said you remember 55 things in my room, what did you remember",remember room,V9.1.3 log,Daniel,GB,pause,6.894,9.894
+cmd_remember__Daniel__quiet.wav,cmd_remember,"You said you remember 55 things in my room, what did you remember",remember room,V9.1.3 log,Daniel,GB,quiet,4.646,7.646
+cmd_remember__Rishi__clean.wav,cmd_remember,"You said you remember 55 things in my room, what did you remember",remember room,V9.1.3 log,Rishi,IN,clean,5.167,8.167
+cmd_remember__Rishi__noise.wav,cmd_remember,"You said you remember 55 things in my room, what did you remember",remember room,V9.1.3 log,Rishi,IN,noise,5.167,8.167
+cmd_remember__Rishi__pause.wav,cmd_remember,"You said you remember 55 things in my room, what did you remember",remember room,V9.1.3 log,Rishi,IN,pause,7.443,10.443
+cmd_remember__Rishi__quiet.wav,cmd_remember,"You said you remember 55 things in my room, what did you remember",remember room,V9.1.3 log,Rishi,IN,quiet,5.167,8.167
+cmd_remember__Meijia__clean.wav,cmd_remember,"You said you remember 55 things in my room, what did you remember",remember room,V9.1.3 log,Meijia,zh-TW reading English,clean,6.453,9.453
+cmd_remember__Meijia__noise.wav,cmd_remember,"You said you remember 55 things in my room, what did you remember",remember room,V9.1.3 log,Meijia,zh-TW reading English,noise,6.453,9.453
+cmd_remember__Meijia__pause.wav,cmd_remember,"You said you remember 55 things in my room, what did you remember",remember room,V9.1.3 log,Meijia,zh-TW reading English,pause,8.601,11.601
+cmd_remember__Meijia__quiet.wav,cmd_remember,"You said you remember 55 things in my room, what did you remember",remember room,V9.1.3 log,Meijia,zh-TW reading English,quiet,6.453,9.453
+cmd_mug__Samantha__clean.wav,cmd_mug,Where's my mug,mug,V9.1.3 log,Samantha,US,clean,1.384,4.384
+cmd_mug__Samantha__noise.wav,cmd_mug,Where's my mug,mug,V9.1.3 log,Samantha,US,noise,1.384,4.384
+cmd_mug__Samantha__quiet.wav,cmd_mug,Where's my mug,mug,V9.1.3 log,Samantha,US,quiet,1.384,4.384
+cmd_mug__Daniel__clean.wav,cmd_mug,Where's my mug,mug,V9.1.3 log,Daniel,GB,clean,1.303,4.303
+cmd_mug__Daniel__noise.wav,cmd_mug,Where's my mug,mug,V9.1.3 log,Daniel,GB,noise,1.303,4.303
+cmd_mug__Daniel__quiet.wav,cmd_mug,Where's my mug,mug,V9.1.3 log,Daniel,GB,quiet,1.303,4.303
+cmd_mug__Rishi__clean.wav,cmd_mug,Where's my mug,mug,V9.1.3 log,Rishi,IN,clean,1.426,4.426
+cmd_mug__Rishi__noise.wav,cmd_mug,Where's my mug,mug,V9.1.3 log,Rishi,IN,noise,1.426,4.426
+cmd_mug__Rishi__quiet.wav,cmd_mug,Where's my mug,mug,V9.1.3 log,Rishi,IN,quiet,1.426,4.426
+cmd_mug__Meijia__clean.wav,cmd_mug,Where's my mug,mug,V9.1.3 log,Meijia,zh-TW reading English,clean,1.635,4.635
+cmd_mug__Meijia__noise.wav,cmd_mug,Where's my mug,mug,V9.1.3 log,Meijia,zh-TW reading English,noise,1.635,4.635
+cmd_mug__Meijia__quiet.wav,cmd_mug,Where's my mug,mug,V9.1.3 log,Meijia,zh-TW reading English,quiet,1.635,4.635
+cmd_greenkey__Samantha__clean.wav,cmd_greenkey,The green key,green key,V5 (never transcribed),Samantha,US,clean,1.278,4.278
+cmd_greenkey__Samantha__noise.wav,cmd_greenkey,The green key,green key,V5 (never transcribed),Samantha,US,noise,1.278,4.278
+cmd_greenkey__Samantha__quiet.wav,cmd_greenkey,The green key,green key,V5 (never transcribed),Samantha,US,quiet,1.278,4.278
+cmd_greenkey__Daniel__clean.wav,cmd_greenkey,The green key,green key,V5 (never transcribed),Daniel,GB,clean,1.452,4.452
+cmd_greenkey__Daniel__noise.wav,cmd_greenkey,The green key,green key,V5 (never transcribed),Daniel,GB,noise,1.452,4.452
+cmd_greenkey__Daniel__quiet.wav,cmd_greenkey,The green key,green key,V5 (never transcribed),Daniel,GB,quiet,1.452,4.452
+cmd_greenkey__Rishi__clean.wav,cmd_greenkey,The green key,green key,V5 (never transcribed),Rishi,IN,clean,1.333,4.333
+cmd_greenkey__Rishi__noise.wav,cmd_greenkey,The green key,green key,V5 (never transcribed),Rishi,IN,noise,1.333,4.333
+cmd_greenkey__Rishi__quiet.wav,cmd_greenkey,The green key,green key,V5 (never transcribed),Rishi,IN,quiet,1.333,4.333
+cmd_greenkey__Meijia__clean.wav,cmd_greenkey,The green key,green key,V5 (never transcribed),Meijia,zh-TW reading English,clean,1.612,4.612
+cmd_greenkey__Meijia__noise.wav,cmd_greenkey,The green key,green key,V5 (never transcribed),Meijia,zh-TW reading English,noise,1.612,4.612
+cmd_greenkey__Meijia__quiet.wav,cmd_greenkey,The green key,green key,V5 (never transcribed),Meijia,zh-TW reading English,quiet,1.612,4.612
+which_closest__Samantha__clean.wav,which_closest,The closest one,closest,which-one reply,Samantha,US,clean,1.592,4.592
+which_closest__Samantha__noise.wav,which_closest,The closest one,closest,which-one reply,Samantha,US,noise,1.592,4.592
+which_closest__Samantha__quiet.wav,which_closest,The closest one,closest,which-one reply,Samantha,US,quiet,1.592,4.592
+which_closest__Daniel__clean.wav,which_closest,The closest one,closest,which-one reply,Daniel,GB,clean,1.615,4.615
+which_closest__Daniel__noise.wav,which_closest,The closest one,closest,which-one reply,Daniel,GB,noise,1.615,4.615
+which_closest__Daniel__quiet.wav,which_closest,The closest one,closest,which-one reply,Daniel,GB,quiet,1.615,4.615
+which_closest__Rishi__clean.wav,which_closest,The closest one,closest,which-one reply,Rishi,IN,clean,1.624,4.624
+which_closest__Rishi__noise.wav,which_closest,The closest one,closest,which-one reply,Rishi,IN,noise,1.624,4.624
+which_closest__Rishi__quiet.wav,which_closest,The closest one,closest,which-one reply,Rishi,IN,quiet,1.624,4.624
+which_closest__Meijia__clean.wav,which_closest,The closest one,closest,which-one reply,Meijia,zh-TW reading English,clean,1.995,4.995
+which_closest__Meijia__noise.wav,which_closest,The closest one,closest,which-one reply,Meijia,zh-TW reading English,noise,1.995,4.995
+which_closest__Meijia__quiet.wav,which_closest,The closest one,closest,which-one reply,Meijia,zh-TW reading English,quiet,1.995,4.995
+which_right__Samantha__clean.wav,which_right,The one on the right,right,which-one reply,Samantha,US,clean,1.464,4.464
+which_right__Samantha__noise.wav,which_right,The one on the right,right,which-one reply,Samantha,US,noise,1.464,4.464
+which_right__Samantha__quiet.wav,which_right,The one on the right,right,which-one reply,Samantha,US,quiet,1.464,4.464
+which_right__Daniel__clean.wav,which_right,The one on the right,right,which-one reply,Daniel,GB,clean,1.557,4.557
+which_right__Daniel__noise.wav,which_right,The one on the right,right,which-one reply,Daniel,GB,noise,1.557,4.557
+which_right__Daniel__quiet.wav,which_right,The one on the right,right,which-one reply,Daniel,GB,quiet,1.557,4.557
+which_right__Rishi__clean.wav,which_right,The one on the right,right,which-one reply,Rishi,IN,clean,1.67,4.67
+which_right__Rishi__noise.wav,which_right,The one on the right,right,which-one reply,Rishi,IN,noise,1.67,4.67
+which_right__Rishi__quiet.wav,which_right,The one on the right,right,which-one reply,Rishi,IN,quiet,1.67,4.67
+which_right__Meijia__clean.wav,which_right,The one on the right,right,which-one reply,Meijia,zh-TW reading English,clean,1.96,4.96
+which_right__Meijia__noise.wav,which_right,The one on the right,right,which-one reply,Meijia,zh-TW reading English,noise,1.96,4.96
+which_right__Meijia__quiet.wav,which_right,The one on the right,right,which-one reply,Meijia,zh-TW reading English,quiet,1.96,4.96
+which_red__Samantha__clean.wav,which_red,"The red one, next to the lamp",red lamp,which-one reply,Samantha,US,clean,2.404,5.404
+which_red__Samantha__noise.wav,which_red,"The red one, next to the lamp",red lamp,which-one reply,Samantha,US,noise,2.404,5.404
+which_red__Samantha__pause.wav,which_red,"The red one, next to the lamp",red lamp,which-one reply,Samantha,US,pause,4.237,7.237
+which_red__Samantha__quiet.wav,which_red,"The red one, next to the lamp",red lamp,which-one reply,Samantha,US,quiet,2.404,5.404
+which_red__Daniel__clean.wav,which_red,"The red one, next to the lamp",red lamp,which-one reply,Daniel,GB,clean,2.497,5.497
+which_red__Daniel__noise.wav,which_red,"The red one, next to the lamp",red lamp,which-one reply,Daniel,GB,noise,2.497,5.497
+which_red__Daniel__pause.wav,which_red,"The red one, next to the lamp",red lamp,which-one reply,Daniel,GB,pause,4.326,7.326
+which_red__Daniel__quiet.wav,which_red,"The red one, next to the lamp",red lamp,which-one reply,Daniel,GB,quiet,2.497,5.497
+which_red__Rishi__clean.wav,which_red,"The red one, next to the lamp",red lamp,which-one reply,Rishi,IN,clean,2.564,5.564
+which_red__Rishi__noise.wav,which_red,"The red one, next to the lamp",red lamp,which-one reply,Rishi,IN,noise,2.564,5.564
+which_red__Rishi__pause.wav,which_red,"The red one, next to the lamp",red lamp,which-one reply,Rishi,IN,pause,4.41,7.41
+which_red__Rishi__quiet.wav,which_red,"The red one, next to the lamp",red lamp,which-one reply,Rishi,IN,quiet,2.564,5.564
+which_red__Meijia__clean.wav,which_red,"The red one, next to the lamp",red lamp,which-one reply,Meijia,zh-TW reading English,clean,3.202,6.202
+which_red__Meijia__noise.wav,which_red,"The red one, next to the lamp",red lamp,which-one reply,Meijia,zh-TW reading English,noise,3.202,6.202
+which_red__Meijia__pause.wav,which_red,"The red one, next to the lamp",red lamp,which-one reply,Meijia,zh-TW reading English,pause,4.944,7.944
+which_red__Meijia__quiet.wav,which_red,"The red one, next to the lamp",red lamp,which-one reply,Meijia,zh-TW reading English,quiet,3.202,6.202
+hand_under__Samantha__clean.wav,hand_under,My hand is under the table,hand under table,hand-help reply,Samantha,US,clean,1.99,4.99
+hand_under__Samantha__noise.wav,hand_under,My hand is under the table,hand under table,hand-help reply,Samantha,US,noise,1.99,4.99
+hand_under__Samantha__quiet.wav,hand_under,My hand is under the table,hand under table,hand-help reply,Samantha,US,quiet,1.99,4.99
+hand_under__Daniel__clean.wav,hand_under,My hand is under the table,hand under table,hand-help reply,Daniel,GB,clean,2.012,5.012
+hand_under__Daniel__noise.wav,hand_under,My hand is under the table,hand under table,hand-help reply,Daniel,GB,noise,2.012,5.012
+hand_under__Daniel__quiet.wav,hand_under,My hand is under the table,hand under table,hand-help reply,Daniel,GB,quiet,2.012,5.012
+hand_under__Rishi__clean.wav,hand_under,My hand is under the table,hand under table,hand-help reply,Rishi,IN,clean,2.227,5.227
+hand_under__Rishi__noise.wav,hand_under,My hand is under the table,hand under table,hand-help reply,Rishi,IN,noise,2.227,5.227
+hand_under__Rishi__quiet.wav,hand_under,My hand is under the table,hand under table,hand-help reply,Rishi,IN,quiet,2.227,5.227
+hand_under__Meijia__clean.wav,hand_under,My hand is under the table,hand under table,hand-help reply,Meijia,zh-TW reading English,clean,2.703,5.703
+hand_under__Meijia__noise.wav,hand_under,My hand is under the table,hand under table,hand-help reply,Meijia,zh-TW reading English,noise,2.703,5.703
+hand_under__Meijia__quiet.wav,hand_under,My hand is under the table,hand under table,hand-help reply,Meijia,zh-TW reading English,quiet,2.703,5.703
+hand_holding__Samantha__clean.wav,hand_holding,I'm holding it now,holding,hand-help reply,Samantha,US,clean,1.645,4.646
+hand_holding__Samantha__noise.wav,hand_holding,I'm holding it now,holding,hand-help reply,Samantha,US,noise,1.645,4.646
+hand_holding__Samantha__quiet.wav,hand_holding,I'm holding it now,holding,hand-help reply,Samantha,US,quiet,1.645,4.646
+hand_holding__Daniel__clean.wav,hand_holding,I'm holding it now,holding,hand-help reply,Daniel,GB,clean,1.653,4.653
+hand_holding__Daniel__noise.wav,hand_holding,I'm holding it now,holding,hand-help reply,Daniel,GB,noise,1.653,4.653
+hand_holding__Daniel__quiet.wav,hand_holding,I'm holding it now,holding,hand-help reply,Daniel,GB,quiet,1.653,4.653
+hand_holding__Rishi__clean.wav,hand_holding,I'm holding it now,holding,hand-help reply,Rishi,IN,clean,1.779,4.779
+hand_holding__Rishi__noise.wav,hand_holding,I'm holding it now,holding,hand-help reply,Rishi,IN,noise,1.779,4.779
+hand_holding__Rishi__quiet.wav,hand_holding,I'm holding it now,holding,hand-help reply,Rishi,IN,quiet,1.779,4.779
+hand_holding__Meijia__clean.wav,hand_holding,I'm holding it now,holding,hand-help reply,Meijia,zh-TW reading English,clean,2.239,5.239
+hand_holding__Meijia__noise.wav,hand_holding,I'm holding it now,holding,hand-help reply,Meijia,zh-TW reading English,noise,2.239,5.239
+hand_holding__Meijia__quiet.wav,hand_holding,I'm holding it now,holding,hand-help reply,Meijia,zh-TW reading English,quiet,2.239,5.239
+check_isthisit__Samantha__clean.wav,check_isthisit,Is this it?,this it,case 2: not sure,Samantha,US,clean,1.124,4.124
+check_isthisit__Samantha__noise.wav,check_isthisit,Is this it?,this it,case 2: not sure,Samantha,US,noise,1.124,4.124
+check_isthisit__Samantha__quiet.wav,check_isthisit,Is this it?,this it,case 2: not sure,Samantha,US,quiet,1.124,4.124
+check_isthisit__Daniel__clean.wav,check_isthisit,Is this it?,this it,case 2: not sure,Daniel,GB,clean,1.177,4.177
+check_isthisit__Daniel__noise.wav,check_isthisit,Is this it?,this it,case 2: not sure,Daniel,GB,noise,1.177,4.177
+check_isthisit__Daniel__quiet.wav,check_isthisit,Is this it?,this it,case 2: not sure,Daniel,GB,quiet,1.177,4.177
+check_isthisit__Rishi__clean.wav,check_isthisit,Is this it?,this it,case 2: not sure,Rishi,IN,clean,1.17,4.17
+check_isthisit__Rishi__noise.wav,check_isthisit,Is this it?,this it,case 2: not sure,Rishi,IN,noise,1.17,4.17
+check_isthisit__Rishi__quiet.wav,check_isthisit,Is this it?,this it,case 2: not sure,Rishi,IN,quiet,1.17,4.17
+check_isthisit__Meijia__clean.wav,check_isthisit,Is this it?,this it,case 2: not sure,Meijia,zh-TW reading English,clean,1.473,4.473
+check_isthisit__Meijia__noise.wav,check_isthisit,Is this it?,this it,case 2: not sure,Meijia,zh-TW reading English,noise,1.473,4.473
+check_isthisit__Meijia__quiet.wav,check_isthisit,Is this it?,this it,case 2: not sure,Meijia,zh-TW reading English,quiet,1.473,4.473
+check_mug__Samantha__clean.wav,check_mug,Is this my mug?,this mug,case 2: not sure,Samantha,US,clean,1.437,4.437
+check_mug__Samantha__noise.wav,check_mug,Is this my mug?,this mug,case 2: not sure,Samantha,US,noise,1.437,4.437
+check_mug__Samantha__quiet.wav,check_mug,Is this my mug?,this mug,case 2: not sure,Samantha,US,quiet,1.437,4.437
+check_mug__Daniel__clean.wav,check_mug,Is this my mug?,this mug,case 2: not sure,Daniel,GB,clean,1.385,4.386
+check_mug__Daniel__noise.wav,check_mug,Is this my mug?,this mug,case 2: not sure,Daniel,GB,noise,1.385,4.386
+check_mug__Daniel__quiet.wav,check_mug,Is this my mug?,this mug,case 2: not sure,Daniel,GB,quiet,1.385,4.386
+check_mug__Rishi__clean.wav,check_mug,Is this my mug?,this mug,case 2: not sure,Rishi,IN,clean,1.483,4.483
+check_mug__Rishi__noise.wav,check_mug,Is this my mug?,this mug,case 2: not sure,Rishi,IN,noise,1.483,4.483
+check_mug__Rishi__quiet.wav,check_mug,Is this my mug?,this mug,case 2: not sure,Rishi,IN,quiet,1.483,4.483
+check_mug__Meijia__clean.wav,check_mug,Is this my mug?,this mug,case 2: not sure,Meijia,zh-TW reading English,clean,1.821,4.821
+check_mug__Meijia__noise.wav,check_mug,Is this my mug?,this mug,case 2: not sure,Meijia,zh-TW reading English,noise,1.821,4.821
+check_mug__Meijia__quiet.wav,check_mug,Is this my mug?,this mug,case 2: not sure,Meijia,zh-TW reading English,quiet,1.821,4.821
+check_rightone__Samantha__clean.wav,check_rightone,Is it the right one?,right one,case 2: not sure,Samantha,US,clean,1.542,4.542
+check_rightone__Samantha__noise.wav,check_rightone,Is it the right one?,right one,case 2: not sure,Samantha,US,noise,1.542,4.542
+check_rightone__Samantha__quiet.wav,check_rightone,Is it the right one?,right one,case 2: not sure,Samantha,US,quiet,1.542,4.542
+check_rightone__Daniel__clean.wav,check_rightone,Is it the right one?,right one,case 2: not sure,Daniel,GB,clean,1.583,4.583
+check_rightone__Daniel__noise.wav,check_rightone,Is it the right one?,right one,case 2: not sure,Daniel,GB,noise,1.583,4.583
+check_rightone__Daniel__quiet.wav,check_rightone,Is it the right one?,right one,case 2: not sure,Daniel,GB,quiet,1.583,4.583
+check_rightone__Rishi__clean.wav,check_rightone,Is it the right one?,right one,case 2: not sure,Rishi,IN,clean,1.611,4.611
+check_rightone__Rishi__noise.wav,check_rightone,Is it the right one?,right one,case 2: not sure,Rishi,IN,noise,1.611,4.611
+check_rightone__Rishi__quiet.wav,check_rightone,Is it the right one?,right one,case 2: not sure,Rishi,IN,quiet,1.611,4.611
+check_rightone__Meijia__clean.wav,check_rightone,Is it the right one?,right one,case 2: not sure,Meijia,zh-TW reading English,clean,2.111,5.111
+check_rightone__Meijia__noise.wav,check_rightone,Is it the right one?,right one,case 2: not sure,Meijia,zh-TW reading English,noise,2.111,5.111
+check_rightone__Meijia__quiet.wav,check_rightone,Is it the right one?,right one,case 2: not sure,Meijia,zh-TW reading English,quiet,2.111,5.111
+check_havekey__Samantha__clean.wav,check_havekey,"I have it, is it my key?",have key,case 2: not sure,Samantha,US,clean,2.087,5.087
+check_havekey__Samantha__noise.wav,check_havekey,"I have it, is it my key?",have key,case 2: not sure,Samantha,US,noise,2.087,5.087
+check_havekey__Samantha__pause.wav,check_havekey,"I have it, is it my key?",have key,case 2: not sure,Samantha,US,pause,3.921,6.921
+check_havekey__Samantha__quiet.wav,check_havekey,"I have it, is it my key?",have key,case 2: not sure,Samantha,US,quiet,2.087,5.087
+check_havekey__Daniel__clean.wav,check_havekey,"I have it, is it my key?",have key,case 2: not sure,Daniel,GB,clean,2.225,5.225
+check_havekey__Daniel__noise.wav,check_havekey,"I have it, is it my key?",have key,case 2: not sure,Daniel,GB,noise,2.225,5.225
+check_havekey__Daniel__pause.wav,check_havekey,"I have it, is it my key?",have key,case 2: not sure,Daniel,GB,pause,4.112,7.112
+check_havekey__Daniel__quiet.wav,check_havekey,"I have it, is it my key?",have key,case 2: not sure,Daniel,GB,quiet,2.225,5.225
+check_havekey__Rishi__clean.wav,check_havekey,"I have it, is it my key?",have key,case 2: not sure,Rishi,IN,clean,2.162,5.162
+check_havekey__Rishi__noise.wav,check_havekey,"I have it, is it my key?",have key,case 2: not sure,Rishi,IN,noise,2.162,5.162
+check_havekey__Rishi__pause.wav,check_havekey,"I have it, is it my key?",have key,case 2: not sure,Rishi,IN,pause,3.996,6.996
+check_havekey__Rishi__quiet.wav,check_havekey,"I have it, is it my key?",have key,case 2: not sure,Rishi,IN,quiet,2.162,5.162
+check_havekey__Meijia__clean.wav,check_havekey,"I have it, is it my key?",have key,case 2: not sure,Meijia,zh-TW reading English,clean,3.002,6.002
+check_havekey__Meijia__noise.wav,check_havekey,"I have it, is it my key?",have key,case 2: not sure,Meijia,zh-TW reading English,noise,3.002,6.002
+check_havekey__Meijia__pause.wav,check_havekey,"I have it, is it my key?",have key,case 2: not sure,Meijia,zh-TW reading English,pause,4.72,7.72
+check_havekey__Meijia__quiet.wav,check_havekey,"I have it, is it my key?",have key,case 2: not sure,Meijia,zh-TW reading English,quiet,3.002,6.002
+stop__Samantha__clean.wav,stop,Stop,stop,control,Samantha,US,clean,1.025,4.025
+stop__Samantha__noise.wav,stop,Stop,stop,control,Samantha,US,noise,1.025,4.025
+stop__Samantha__quiet.wav,stop,Stop,stop,control,Samantha,US,quiet,1.025,4.025
+stop__Daniel__clean.wav,stop,Stop,stop,control,Daniel,GB,clean,0.967,3.967
+stop__Daniel__noise.wav,stop,Stop,stop,control,Daniel,GB,noise,0.967,3.967
+stop__Daniel__quiet.wav,stop,Stop,stop,control,Daniel,GB,quiet,0.967,3.967
+stop__Rishi__clean.wav,stop,Stop,stop,control,Rishi,IN,clean,1.007,4.007
+stop__Rishi__noise.wav,stop,Stop,stop,control,Rishi,IN,noise,1.007,4.007
+stop__Rishi__quiet.wav,stop,Stop,stop,control,Rishi,IN,quiet,1.007,4.007
+stop__Meijia__clean.wav,stop,Stop,stop,control,Meijia,zh-TW reading English,clean,1.077,4.077
+stop__Meijia__noise.wav,stop,Stop,stop,control,Meijia,zh-TW reading English,noise,1.077,4.077
+stop__Meijia__quiet.wav,stop,Stop,stop,control,Meijia,zh-TW reading English,quiet,1.077,4.077

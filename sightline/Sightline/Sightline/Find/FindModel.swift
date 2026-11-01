@@ -1,7 +1,7 @@
 // labels: production, needs-review, important
 // Find-and-grab app orchestration. v9 (2026-10-31, Nils: "the whole process is a piece of shit user
 // experience, and the voice instruction is crumbled"): reach measured once and saved; one screen with
-// tap (start/stop), double tap ("I have it"), long press (measure reach); short spoken lines; any
+// tap (start/stop), double tap ("Is this it?"), long press (measure reach); short spoken lines; any
 // pick-up starts a one-photo hold check (SAM + Spark, HoldDecision). Nothing latches: only "out of
 // reach" or a lasting obstacle ends a search. Cloud calls stay event-triggered.
 
@@ -98,7 +98,7 @@ final class FindModel {
     private(set) var calibrating = false
     @ObservationIgnored private var calibration = ReachCalibration()
     @ObservationIgnored private var calibrationStarted: Double?
-    /// The last hold check could not tell: the next double tap is the user's own "I have it".
+    /// The last hold check could not tell (status line only since 2026-11-01).
     private(set) var lastCheckUnsure = false
     @ObservationIgnored private var lastInputFrame: Double = 0
     @ObservationIgnored private var frameWatchdog: Task<Void, Never>?
@@ -111,7 +111,7 @@ final class FindModel {
     static let handKey = "sightline.handLength"
     /// Every arm and hand distance threshold, for this user (Nils, 2026-10-31).
     var bodyScale: BodyScale { BodyScale(reach: reachDistance, hand: handLength) }
-    /// The current check was asked for by a double tap ("I have it").
+    /// OBSOLETE (2026-11-01): a double tap no longer claims; always false.
     @ObservationIgnored private var userClaimed = false
     /// Burst recordings (BurstRecorder.swift): per search and per launch caps.
     @ObservationIgnored private var burstsThisSearch = 0
@@ -167,8 +167,8 @@ final class FindModel {
         finishMapping(early: true)
     }
 
-    /// Double tap = "I have it". Idle: same as a tap (start listening). After an unsure check: the
-    /// user's own confirmation (logged as user_confirmed, never as a model result).
+    /// Double tap = "Is this it?" (case 2, Nils 2026-11-01: holding something and not sure). Idle: same as
+    /// a tap (start listening). A user who is sure just closes the app (case 1), so nothing claims "I have it".
     func doubleTap() {
         Haptics.tap()
         log("double_tap", phase.rawValue)
@@ -178,14 +178,9 @@ final class FindModel {
         case .mapping:
             finishRoomScan()
         case .guiding, .grabbing:
-            // Always "I have it" (v9.1): the app checks when that can help; if it cannot tell, it takes
-            // the user's word, logged as user_confirmed (never as a model result).
-            if lastCheckUnsure {
-                acceptUserClaim(reason: "after_unsure")
-            } else {
-                guide?.beginManualCheck()
-                startHoldCheck(fromSession: false, reason: "double_tap", claimed: true)
-            }
+            // The answer is "Yes. That's the X." / "No. The X is still there." / "I can't tell. Hold it up to the camera."
+            guide?.beginManualCheck()
+            startHoldCheck(fromSession: false, reason: "asked")
         case .listening, .locating, .searching, .verifying:
             break
         }
@@ -312,7 +307,7 @@ final class FindModel {
         case .guiding:
             guard let d = handDistance else { return "Going to the \(name). Hold your hand out." }
             return "The \(name) is \(max(1, Int((d * 10).rounded())) * 10) centimetres from your hand."
-        case .grabbing: return lastCheckUnsure ? "Double tap if you have the \(name)." : "The \(name) is at your fingers."
+        case .grabbing: return lastCheckUnsure ? "Double tap to check the \(name)." : "The \(name) is at your fingers."
         case .verifying: return "Checking."
         case .done: return "You have the \(name). Tap to find something else."
         case .mapping: return "Scanning the room. \(mapInventory.items.count) things so far. Tap when done."
@@ -321,6 +316,8 @@ final class FindModel {
 
     // MARK: Hold check (one photo: SAM where it is + Spark is the hand holding it)
 
+    /// OBSOLETE since the case-2 flow (2026-11-01): nothing calls it; a check that cannot tell no longer
+    /// takes the user's word. Kept for the record.
     private func acceptUserClaim(reason: String) {
         lastCheckUnsure = false
         userClaimed = false
@@ -404,8 +401,6 @@ final class FindModel {
 
     private func completeHoldCheck(_ result: Bool?, reason: String) {
         log("hold_check_result", "\(result.map { $0 ? "yes" : "no" } ?? "unsure") (\(reason))")
-        // A double tap said "I have it" and the photo cannot tell: take the user's word.
-        if result == nil, userClaimed { acceptUserClaim(reason: "check_unsure"); return }
         userClaimed = false
         holdCheckID += 1
         lastCheckUnsure = result == nil

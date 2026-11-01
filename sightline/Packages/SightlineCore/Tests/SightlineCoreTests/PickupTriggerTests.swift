@@ -141,20 +141,37 @@ import Testing
         #expect(run(&s, Array(repeating: far, count: 40) + Array(repeating: nil, count: 90), t: &t).isEmpty)
     }
 
-    /// After "Not sure.": one reminder after 6 s while the hand stays on it.
-    @Test func unsureRemindsOnceAfterSixSeconds() {
+    /// Case 2 (Nils, 2026-11-01): "Is this it?" that the photo cannot settle asks to hold it up, looks once
+    /// more after 3 s even with the hand away from the spot, then says what it thinks and stops asking.
+    @Test func unsureAsksToHoldItUpAndLooksOnceMore() {
         var s = GuidanceSession(targetName: "phone", target: object.centre, object: object, cameraTransform: downCamera, time: 0)
         s.beginManualCheck()
-        _ = s.resolveCheck(nil, time: 0)
-        var said: [(Double, String)] = []
+        #expect(s.resolveCheck(nil, time: 0).map(\.text) == ["I can't tell. Hold it up to the camera."])
+        var checks: [(Double, String?)] = []
+        var said: [String] = []
         var t = 0.0
-        for _ in 0..<300 {
+        let up = object.centre + SIMD3(0.05, 0.25, 0.15)  // lifted toward the camera
+        for _ in 0..<600 {
             t += 1.0 / 30
-            said += s.update(time: t, hand: hand(object.centre + SIMD3(0, 0.01, 0)), cameraTransform: downCamera,
-                             targetDepthDelta: 0, speaking: false).lines.map { (t, $0.text) }
+            let out = s.update(time: t, hand: hand(up), cameraTransform: downCamera, targetDepthDelta: 0, speaking: false)
+            said += out.lines.map(\.text)
+            if out.requestCheck {
+                checks.append((t, out.checkReason))
+                said += s.resolveCheck(nil, time: t).map(\.text)
+            }
         }
-        let reminders = said.filter { $0.1 == "Double tap if you have it." }
-        #expect(reminders.count == 1 && abs(reminders[0].0 - 6) < 0.1, "\(said)")
+        // Later checks are the ordinary stalled ones (the hand stays still away from the spot).
+        #expect(checks.filter { $0.1 == "held_up" }.count == 1, "\(checks)")
+        #expect(checks.first?.1 == "held_up" && abs((checks.first?.0 ?? 0) - 3) < 0.1, "\(checks)")
+        #expect(said.filter { $0 == "I can't tell. Hold it up to the camera." }.isEmpty, "\(said)")
+        #expect(said.contains("I still can't tell. It may be the phone."), "\(said)")
+    }
+
+    /// An asked check that sees it in the hand answers the question.
+    @Test func askedCheckAnswersYes() {
+        var s = GuidanceSession(targetName: "phone", target: object.centre, object: object, cameraTransform: downCamera, time: 0)
+        s.beginManualCheck()
+        #expect(s.resolveCheck(true, time: 0).map(\.text) == ["Yes. That's the phone."])
     }
 }
 

@@ -235,7 +235,7 @@ import simd
         var s = GuidanceSession(targetName: "phone", target: [0, 0, -0.5], cameraTransform: camera, time: 0)
         s.beginManualCheck()
         let lines = s.resolveCheck(false, time: 1)
-        #expect(lines.map(\.text) == ["The phone is still there."])
+        #expect(lines.map(\.text) == ["No. The phone is still there."])  // asked (double tap): worded as a reply
         #expect(s.phase == .guiding)
     }
 

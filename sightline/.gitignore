@@ -17,6 +17,9 @@ Secrets.plist
 # Local logs
 logs/
 spike/out/
+# STT experiment audio (regenerate with spike/stt/make_corpus.py, make_tts_corpus.py)
+spike/stt/corpus/
+spike/stt/tts/
 .env.*
 !.env.example
 

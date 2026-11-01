@@ -375,8 +375,11 @@ struct SimUser {
     var groped = false
     var lift: Float = 0
     var promptsHeard = 0
-    /// Holding it after "Not sure": double taps for a check.
+    /// Holding it and told "Double tap to check it.": asks "Is this it?" (case 2).
     var wantsCheck = false
+    /// Case 1 (Nils, 2026-11-01): holding the real thing after "I still can't tell. It may be the X.",
+    /// the user feels it is right and closes the app.
+    var closesApp = false
     var doubleTaps = 0
     /// Body yaw (radians, + = right), same convention as Camera.
     var facing: Float = 0
@@ -444,11 +447,16 @@ struct SimUser {
         if text == "Stop." { plan = .idle; return }
         if text.hasPrefix("Got it") || text.hasPrefix("Tap the screen") || text == "Checking." { return }
         if text.hasPrefix("I don't think you have") || text.hasSuffix("is still there.") { gripped = false; lifted = false; lift = 0; return }
-        // "Not sure. Double tap if you have it.": someone holding it double taps.
-        // At most twice: a real user gives up on double tapping after that. In the fault scenarios the
-        // user does not really hold the target (wrong object, nothing moved, ...), so they never claim it:
-        // those runs test the automatic check alone, and a self-confirmation there would hide a miss.
-        if text.hasPrefix("Not sure") || text.hasPrefix("Double tap") {
+        // "I can't tell. Hold it up to the camera.": the session looks again by itself.
+        if text.hasPrefix("I can't tell") || text.hasPrefix("Yes. That's") { return }
+        // In the fault scenarios the user does not really hold the target (wrong object, nothing moved, ...),
+        // so they never close the app as done and never ask: those runs test the automatic check alone.
+        if text.hasPrefix("I still can't tell") {
+            if gripped && lifted, sc.holdFault == .none { closesApp = true }
+            return
+        }
+        // "Double tap to check it.": someone holding something asks "Is this it?", at most twice.
+        if text.hasPrefix("Double tap") {
             if doubleTaps < 2, gripped && lifted, sc.holdFault == .none { doubleTaps += 1; wantsCheck = true }
             return
         }
@@ -645,7 +653,7 @@ func run(_ sc: Scenario, seed: UInt64, maxTime: Double = 150) -> RunResult {
     var frozenFaultHand: HandKeypoints?
     var faultStartedAt: Double?
     var unclear = 0
-    var claimed = false
+
 
     /// One check photo, as the app does it: SAM (where is it now) + Spark (is the hand holding it).
     func captureCheck(hand: HandKeypoints?) -> (held: Bool, atSpot: Bool?, spark: Bool?) {
@@ -747,8 +755,7 @@ func run(_ sc: Scenario, seed: UInt64, maxTime: Double = 150) -> RunResult {
             && session.phase != .checking && pendingCheck == nil && checks == 0
         if user.wantsCheck, session.phase == .guiding || session.phase == .grabbing, pendingCheck == nil {
             user.wantsCheck = false
-            session.beginManualCheck()  // double tap: "I have it"
-            claimed = true
+            session.beginManualCheck()  // double tap: "Is this it?"
             let c = captureCheck(hand: observed)
             pendingCheck = (t + 2, c.held, c.atSpot, c.spark)
         } else if out.requestCheck || slideCheck, pendingCheck == nil {
@@ -760,19 +767,17 @@ func run(_ sc: Scenario, seed: UInt64, maxTime: Double = 150) -> RunResult {
             pendingCheck = nil
             let (result, reason) = HoldDecision.decide(held: c.held, atSpot: c.atSpot, spark: c.spark)
             note(t, "DECIDE \(result.map(String.init) ?? "nil") \(reason.rawValue)")
-            // As in the app: a double tap that the photo cannot settle is the user's own confirmation.
-            if result == nil, claimed { outcome = "self_confirmed"; note(t, "USER CONFIRMED"); break }
-            claimed = false
             if result == nil { unclear += 1 }
             session.resolveCheck(result, time: t).forEach { say($0, t) }
         }
+        if user.closesApp { outcome = "self_closed"; note(t, "USER CLOSED THE APP"); break }
         if session.endReason != nil { outcome = "ended"; break }
         if session.phase == .done { outcome = "done"; break }
         if session.phase == .gaveUp { outcome = "gave up"; break }
     }
-    if outcome != "done", outcome != "self_confirmed", unclear > 0 { outcome = "uncertain" }
-    // A fault run is never a success by self-confirmation (see the double-tap rule above).
-    let ok = (outcome == "done" || (outcome == "self_confirmed" && sc.holdFault == .none)) && user.lifted
+    if outcome != "done", outcome != "self_closed", unclear > 0 { outcome = "uncertain" }
+    // A fault run is never a success by the user closing the app (see SimUser.act).
+    let ok = (outcome == "done" || (outcome == "self_closed" && sc.holdFault == .none)) && user.lifted
     note(t, "END  \(outcome); palm to surface at grab: " + (missAtGrab.map { String(format: "%.1f cm", $0 * 100) } ?? "-"))
     // Silence: gaps between lines while the session was guiding or grabbing (the user is left waiting).
     var silence = 0.0
@@ -813,7 +818,7 @@ if chosen.isEmpty {
 }
 
 print("Synthetic results only; ended (out of reach / blocked) is reported separately from a completed grasp.")
-print("ok counts self_confirmed (double tap the photo could not settle); self = how many of ok")
+print("ok counts self_closed (holding the target after \"I still can't tell\", the user closes the app); self = how many of ok")
 print("wrong_object / hand_only / object_only / slide_only: ok means a wrong \"Got it\" (should be 0/20)")
 print("hits = times a hand went into the obstacle or a cup (ground truth; should be 0)")
 print("silent = runs with > 12 s of silence while guiding/grabbing; loop = runs with a line said 3+ times in 10 s")
@@ -833,7 +838,7 @@ for sc in chosen {
     let ok = results.filter(\.success)
     let misses = results.compactMap(\.trueMissAtGrab).map { Double($0) * 100 }
     print(sc.name.padding(toLength: 16, withPad: " ", startingAt: 0) + String(format: " %2d/%-2d %4d %4d  %4d  %8.1f  %5.1f  %7.1f  %6.1f  %4.1f  %4d  %4d  %4d  %5.1f  %6.1f  %@",
-                 ok.count, results.count, results.filter { $0.outcome == "self_confirmed" && $0.success }.count,
+                 ok.count, results.count, results.filter { $0.outcome == "self_closed" && $0.success }.count,
                  results.filter { $0.outcome == "ended" }.count, results.filter { $0.outcome == "uncertain" }.count, median(ok.map(\.seconds)), median(results.map { Double($0.lines) }),
                  median(misses), median(results.map(\.keypointsSeen)), median(results.map { Double($0.warnings) }),
                  results.filter { $0.hits > 0 }.count, results.filter { $0.longestSilence > 12 }.count,

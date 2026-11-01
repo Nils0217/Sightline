@@ -80,10 +80,10 @@ import Testing
         #expect(s.phase == .checking)
         let lines = s.checkTimedOut(time: t)
         #expect(s.phase == .grabbing)
-        #expect(lines.first?.text == "Not sure. Double tap if you have it.")
+        #expect(lines.first?.text == "I can't tell. Hold it up to the camera.")
     }
 
-    /// After `maxAutoChecks` the session only says once to double tap.
+    /// After `maxAutoChecks` the session only says once how to ask for a check.
     @Test func automaticChecksAreCapped() {
         var s = GuidanceSession(targetName: "phone", target: object.centre, object: object, cameraTransform: downCamera, time: 0)
         s.maxAutoChecks = 2
@@ -102,7 +102,7 @@ import Testing
             }
         }
         #expect(checks == 2)
-        #expect(said.filter { $0 == "Double tap if you have it." }.count == 1)
+        #expect(said.filter { $0 == "Double tap to check it." }.count == 1)
     }
 
     /// v6 run 2: the hand hovered ~7 cm over the phone and single-frame fingertip depth jumps (±6 cm)

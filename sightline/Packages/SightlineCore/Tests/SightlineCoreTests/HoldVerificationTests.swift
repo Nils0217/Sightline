@@ -111,16 +111,18 @@ import simd
     }
     @Test func negativeVerdictWaitsForUserInsteadOfRestartingChecks() {
         var s = GuidanceSession(targetName: "phone", target: [0, 0, -0.4], cameraTransform: matrix_identity_float4x4, time: 0)
-        // v9: "not sure" goes back to grabbing and asks for a double tap; the hand resting at the
-        // spot does not start another check by itself.
+        // Case 2 (2026-11-01): "not sure" asks to hold it up and looks once more (the held-up check);
+        // after a second "not sure" the hand resting at the spot does not start another check by itself.
         s.beginManualCheck()
-        #expect(s.resolveCheck(nil, time: 1).map(\.text) == ["Not sure. Double tap if you have it."])
-        for i in 2..<100 {
+        #expect(s.resolveCheck(nil, time: 1).map(\.text) == ["I can't tell. Hold it up to the camera."])
+        _ = s.update(time: 4, hand: hand([0, 0, -0.4]), cameraTransform: matrix_identity_float4x4, targetDepthDelta: nil, speaking: false)
+        #expect(s.resolveCheck(nil, time: 4).map(\.text) == ["I still can't tell. It may be the phone."])
+        for i in 5..<100 {
             let out = s.update(time: Double(i), hand: hand([0, 0, -0.4]), cameraTransform: matrix_identity_float4x4,
                                targetDepthDelta: nil, speaking: false)
             #expect(!out.requestCheck)
             // After 12 s without a pick-up it guides again (v9.1: no dead end; v9.2: 20 -> 12 s), so tones may return.
-            if i < 13 { #expect(out.toneDistance == nil) }
+            if i < 16 { #expect(out.toneDistance == nil) }
         }
     }
     @Test func overshootIsDetectedWithoutRequestingMoreMovement() {
