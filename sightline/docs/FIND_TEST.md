@@ -50,6 +50,7 @@ VoiceOver on: double tap = "I have it", two-finger double tap = start / stop; sw
 8e. **Hand on it, not picking up.** Rest your hand on top of the object without lifting for 12 s: expect "It's right below your hand." (every 6 s).
 8f. **Can't tell (2026-11-01).** When you hear "I can't tell. Hold it up to the camera.", hold it in front of the phone: about 3 s later a second check (log `hold_check held_up`), then "Yes. That's the X." or a description of what is in your hand (or how to move it into view) and "Double tap to check again." (log `describe_held_result`). Hold it out of view: expect "I can't see it. Hold it in front of the phone." once.
 9. **Far object.** Object about 1 m away: directions still come (no "out of reach"); lean or step as you need.
+9a. **Speech engine (branch muse-voice).** The waveform button switches Muse / Apple (saved; "Listening with Muse." / "Listening on the phone."). With Muse, say each test line once: "Where's my mug", "Can you help me find… (pause 2 s) …my book", "Stop", "The red one, next to the lamp", "I'm thirsty". Each listen logs `stt engine muse muse "…" apple "…" muse_state ok connect_ms … listen_s …`: both transcripts, so one run compares them. Flight mode: expect `engine apple_fallback`, and the app still works.
 10. **Stop.** Tap in each phase (listening, looking, guiding, checking): "Stopped." each time, nothing continues afterwards.
 11. **Room scan.** "scan the room", turn slowly, tap when done: "Saving the room." then "Room saved. …"
 12. Export (top right) and copy to `logs/v9/`.

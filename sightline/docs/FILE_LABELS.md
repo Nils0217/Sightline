@@ -85,6 +85,7 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `Sightline/Sightline/Find/RoomMapStore.swift` | production, needs-review, important | Saves and loads `Documents/room_map/` (ARWorldMap + inventory.json, overwritten per room scan) |
 | `Sightline/Sightline/Audio/AudioSessionKeeper.swift` | production, needs-review | Shared audio session: loudspeaker, re-apply after listen, interruptions and route changes, logged |
 | `Sightline/Sightline/Audio/Haptics.swift` | production, needs-review | Haptic cues for taps, reset, success, warning |
+| `Sightline/Sightline/Audio/MuseStream.swift` | production, needs-review, sensitive | Muse Voice Transcribe realtime stream and stop rule (branch muse-voice); reads the API key |
 | `Packages/SightlineCore/Tests/SightlineCoreTests/RoomInventoryTests.swift` | testing, needs-review | Room inventory, placement, tiles, scan directions |
 | `Packages/SightlineCore/Tests/SightlineCoreTests/ReviewFixTests.swift` | testing, needs-review | Muse review 2026-10-30: hold decision matrix, check re-arm/cap/timeout, agent text, room naming, turn sizes |
 | `Sightline/Sightline/Find/DiagnosticRecorder.swift` | testing, needs-review, important | Recording mode: photo, SAM, overlay, screen, depth per event into `Documents/diagnostics/<launch>/` |
