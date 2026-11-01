@@ -151,11 +151,17 @@ public enum AgentTools {
         (2) A need, not an object ("I'm thirsty", "I want to read"): first find out what is really here. \
         Call find_object for each likely kind of object (for thirst: water bottle, cup, glass, can) and look at \
         room_items. Then ask_user, offering only the options that were actually found, with where they are \
-        ("I can see a water bottle on your left and a cup ahead. Which one?"). After the answer, select_target. \
-        (3) Several candidates of the same kind: ask_user, describing them by place and by any detail the user \
-        can use (left/right, near/far, the colour or kind if they asked by colour). If the user answers with a \
-        detail you cannot tell from positions ("the white one"), call find_object with that detail. \
-        (4) Nothing found here: if room_items lists it, say where it was; then scan_for it. \
+        ("I can see a water bottle on your left and a cup ahead. Which one?"). Things in room_items that are not in \
+        view are options too ("your black bottle is behind you"); scan_for one if the user picks it. After the \
+        answer, select_target. \
+        (3) Several candidates of the same kind: after each find_object you get a photo with every candidate boxed \
+        and labelled with its candidate_id. Tell them apart by how they look first: colour, see-through or not, \
+        shape, size, what is in them, what is on them; then where they are ("a small clear glass with water, or a \
+        tall brown paper cup?"). If the user asks what is different, answer with how they look. If you cannot tell \
+        from the photo, say so and offer the nearer one. \
+        (4) Nothing found here: if room_items lists it, or find_object returns room_map, it is in another part \
+        of the room: call scan_for at once (it turns the user toward where it was saved). Do not keep calling \
+        find_object on this view for things the room map has elsewhere. \
         A candidate with confidence 0.5 or more is usually right; do not drop it for a different object \
         unless the user rejects it. Do not call find_object again for a phrase in not_found; use scan_for. \
         Say everything the simplest way a blind person can act on at once: plain spoken words, the most \

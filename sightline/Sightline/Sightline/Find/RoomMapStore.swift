@@ -3,15 +3,16 @@
 // probably are). Two files in Documents/room_map/, both **overwritten** by each new room scan:
 //   world.arworldmap  ARKit world map (relocalization: positions only make sense after it matched)
 //   inventory.json    RoomInventory: object names + world positions, updated after every find
-// At launch the app tries to relocalize against the map for `relocalizeTimeout` seconds and falls
-// back to a fresh session (FindModel); `active` is true only after a match.
+// At launch the app tries to relocalize against the map for `relocalizeTimeout` seconds (a tap to search
+// ends it early) and falls back to a fresh session (FindModel); `active` is true only after a match.
 
 import ARKit
 import Foundation
 import SightlineCore
 
 final class RoomMapStore {
-    static let relocalizeTimeout: TimeInterval = 8
+    /// Was 8 s: in 6 launches (V5 to v9.2) the map never matched in time; the G3 plan allowed 30 s.
+    static let relocalizeTimeout: TimeInterval = 30
 
     private(set) var inventory: RoomInventory?
     /// ARKit relocalized against the saved map in this launch, or a new map was just saved.
