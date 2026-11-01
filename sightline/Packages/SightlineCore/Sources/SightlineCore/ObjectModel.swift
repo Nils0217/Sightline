@@ -56,6 +56,13 @@ public struct ObjectModel: Sendable {
         isFlat ? centre : nearestSurfacePoint(to: palm)
     }
 
+    /// The shape is no wider than the object looks on the photo (`boxMetres`: the SAM box's larger side,
+    /// in metres at the object's distance). v9.2 log: LiDAR passes through a clear glass, so the "glass" became
+    /// the table and window behind it ("flat 35x0x64 cm"). Such a shape is wrong; the caller keeps the centre only.
+    public func fitsBox(_ boxMetres: Float) -> Bool {
+        max(size.x, size.z) <= 2.5 * boxMetres + 0.05
+    }
+
     /// Same shape moved (re-lock found it a little elsewhere).
     public func moved(by d: SIMD3<Float>) -> ObjectModel {
         ObjectModel(points: points.map { $0 + d }, supportHeight: supportHeight.map { $0 + d.y }, isFlat: isFlat)

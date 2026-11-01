@@ -85,6 +85,8 @@ final class FindModel {
     /// Agent: phrases find_object looked for with nothing found in this search, and finds so far.
     @ObservationIgnored private var notFound: [String] = []
     @ObservationIgnored private var agentFinds = 0
+    /// Photos with the latest find_object candidates boxed and labelled, sent to Spark after the tool outputs.
+    @ObservationIgnored private var agentPhotos: [(note: String, jpeg: Data)] = []
     @ObservationIgnored private var lastJPEG: Data?
     /// The hand-help conversation is running (`startHandHelp`).
     @ObservationIgnored private var handHelpRunning = false
@@ -264,7 +266,8 @@ final class FindModel {
         Task {
             if await SpeechInput.requestAuthorization() {
                 speaker.say(reachDistance == nil ? "Welcome. Hold your hand out comfortably, then press and hold the screen."
-                                                 : "Ready. Tap and say what to find.")
+                            : relocalizingSince != nil ? "Ready. To use the saved room, turn slowly and look around first."
+                            : "Ready. Tap and say what to find.")
             } else {
                 speaker.say("Sightline needs microphone and speech permission. Please allow them in Settings.")
             }
@@ -324,7 +327,7 @@ final class FindModel {
         case .grabbing: return lastCheckUnsure ? "Double tap to check the \(name)." : "The \(name) is at your fingers."
         case .verifying: return "Checking."
         case .done: return "You have the \(name). Tap to find something else."
-        case .mapping: return "Scanning the room. \(mapInventory.items.count) things so far. Tap when done."
+        case .mapping: return "Scanning the room. \(mapInventory.items.count) things so far. It stops by itself."
         }
     }
 
@@ -480,6 +483,9 @@ final class FindModel {
     // MARK: Command
 
     private func listen() {
+        // A search before the saved room matched: positions would jump when it matches mid-search, so start
+        // fresh now (nothing is locked yet).
+        abandonRoomMap(reason: "tap before match")
         speaker.stop()
         tones.stop()
         tones.earcon(.listening)
@@ -518,6 +524,7 @@ final class FindModel {
         candidates = []
         notFound = []
         agentFinds = 0
+        agentPhotos = []
         rejected = []
         whichAsked = false
         samCalls = 0
@@ -582,6 +589,8 @@ final class FindModel {
         var obstacles: ObstacleMap?
         var referenceCrop: Data?
         var sourceJPEG: Data
+        /// LiDAR's shape was much wider than the photo box (clear glass): dropped, centre only.
+        var seeThrough = false
     }
 
     /// OBSOLETE since v9.2: Spark now checks every single lock (T11: a utensil holder locked as "mug" at
@@ -702,12 +711,18 @@ final class FindModel {
         let recorded = RecordedCandidate(id: r.id, confidence: r.confidence ?? 0, world: world, cameraPoint: hit.cameraPoint,
                                          samples: hit.samples, depthSpread: hit.depthSpread, box: box, mask: mask,
                                          reprojected: check?.pixel, reprojectsInsideMask: check?.inside, chosen: chosen)
-        let object = ObjectModel.build(mask: mask, depth: s.depth, intrinsics: s.intrinsics, cameraTransform: t)
+        var object = ObjectModel.build(mask: mask, depth: s.depth, intrinsics: s.intrinsics, cameraTransform: t)
+        // See-through (clear glass): LiDAR measured what is behind it. Box side in metres at the object's distance;
+        // the uploaded portrait width is the raw image height.
+        let boxPixels = Float(max(r.right - r.left, r.bottom - r.top)) * s.intrinsics.imageSize.y / Float(r.sourceWidth)
+        var seeThrough = false
+        if let o = object, !o.fitsBox(boxPixels * -hit.cameraPoint.z / s.intrinsics.fx) { object = nil; seeThrough = true }
         let obstacles = object.flatMap {
             ObstacleMap.build(mask: mask, depth: s.depth, intrinsics: s.intrinsics, cameraTransform: t, object: $0, scale: scale)
         }
         return Candidate(info: info, world: object?.centre ?? world, box: box, recorded: recorded,
-                         object: object, obstacles: obstacles, referenceCrop: Self.crop(s.jpeg, to: box, margin: 0.3), sourceJPEG: s.jpeg)
+                         object: object, obstacles: obstacles, referenceCrop: Self.crop(s.jpeg, to: box, margin: 0.3), sourceJPEG: s.jpeg,
+                         seeThrough: seeThrough)
     }
 
     private func lock(noun: String) async {
@@ -928,7 +943,7 @@ final class FindModel {
             String(format: "%@ size %.0fx%.0fx%.0f cm support %@ obstacles %d", o.isFlat ? "flat" : "solid",
                    o.size.x * 100, o.size.y * 100, o.size.z * 100,
                    o.supportHeight.map { String(format: "%.2f", $0) } ?? "none", c.obstacles?.points.count ?? 0)
-        } ?? "no model (centre only)")
+        } ?? (c.seeThrough ? "no model (see-through: LiDAR shape wider than the photo box)" : "no model (centre only)"))
         let session = GuidanceSession(targetName: targetName ?? "object", target: c.world, object: c.object,
                                       obstacles: c.obstacles, cameraTransform: lastCamera, time: lastFrameTime,
                                       reachProfile: ReachProfile(maximumDistance: reachDistance ?? 0), scale: bodyScale)
@@ -1100,6 +1115,24 @@ final class FindModel {
         return DepthProjector.world(fromCamera: cam, cameraTransform: s.cameraTransform)
     }
 
+    /// Green boxes, each labelled (candidate ids for the agent).
+    nonisolated static func drawLabelledBoxes(_ jpeg: Data, boxes: [(CGRect, String)]) -> Data? {
+        guard let image = UIImage(data: jpeg) else { return nil }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: image.size, format: format).jpegData(withCompressionQuality: 0.85) { ctx in
+            image.draw(at: .zero)
+            ctx.cgContext.setLineWidth(3)
+            UIColor.green.setStroke()
+            for (box, label) in boxes {
+                ctx.cgContext.stroke(box)
+                (label as NSString).draw(at: CGPoint(x: box.minX + 2, y: max(0, box.minY - 26)),
+                                         withAttributes: [.font: UIFont.boldSystemFont(ofSize: 22), .foregroundColor: UIColor.green,
+                                                          .backgroundColor: UIColor.black.withAlphaComponent(0.6)])
+            }
+        }
+    }
+
     nonisolated static func drawMarks(_ jpeg: Data, at points: [CGPoint?], labels: [String], box: CGRect? = nil,
                                       boxLabel: String? = nil) -> Data? {
         guard let image = UIImage(data: jpeg) else { return nil }
@@ -1228,6 +1261,12 @@ final class FindModel {
                 guard id == sessionID, phase == .locating else { return }
             }
             history += turn.calls.map(MuseAgent.callItem) + outputs
+            // v9.2 log: "4 cups ... the one on your left or one on the right?", user: "What's different?". The
+            // agent only had positions; now it sees each candidate boxed with its id, so it can say how they look.
+            if !agentPhotos.isEmpty {
+                history += MuseAgent.userMessage(agentPhotos.map(\.note).joined(separator: " "), images: agentPhotos.map(\.jpeg))
+                agentPhotos = []
+            }
         }
         log("agent_turn_limit", "")
         phase = .idle
@@ -1263,10 +1302,22 @@ final class FindModel {
                     return c
                 }
                 candidates = Self.merged(candidates, fresh)
+                let kept = fresh.filter { c in candidates.contains { $0.info.id == c.info.id } }
+                if let first = kept.first, let photo = Self.drawLabelledBoxes(first.sourceJPEG, boxes: kept.map { ($0.box, $0.info.id) }) {
+                    agentPhotos.append(("Photo for find_object \"\(noun)\": each candidate is boxed in green with its candidate_id.", photo))
+                }
                 return .output(agentState().json())
             case .failure(let error):
                 notFound.append(noun)
                 log("agent_not_found", "\(noun) \(error.reason)")
+                // Not in view but in the saved room map (Nils, 2026-11-01: "the object did get scanned and stored
+                // into the 3D map"): tell Spark where, so it turns the user there instead of searching this view.
+                if let item = room.item(for: noun) {
+                    let hint = RoomInventory.hint(item, noun: noun, cameraTransform: lastCamera)
+                    log("agent_room_hint", "\(noun) -> \(item.name)")
+                    return .output(#"{"not_in_view":""# + noun + #"","room_map":""# + hint
+                                   + #" Call scan_for to turn the user there.","state":"# + agentState().json() + "}")
+                }
                 return .output(agentState().json())
             }
         case .scanFor(let noun):
@@ -1461,11 +1512,22 @@ final class FindModel {
             relocalizingSince = nil
             room.relocalized()
             log("room_map_relocalized", String(format: "%.1f s", Date().timeIntervalSince(since)))
+            // v9.2 log: the map was never matched in 6 launches and nobody knew; say both outcomes.
+            if phase == .idle { say(SpokenLine(text: "Saved room found.", interrupt: false)) }
         } else if Date().timeIntervalSince(since) > RoomMapStore.relocalizeTimeout {
-            relocalizingSince = nil
-            log("room_map_fallback", f.tracking)
-            session.run(Self.trackingConfig(), options: [.resetTracking, .removeExistingAnchors])
+            abandonRoomMap(reason: f.tracking)
+            if phase == .idle {
+                say(SpokenLine(text: "I couldn't match the saved room. Say scan the room to save it again.", interrupt: false))
+            }
         }
+    }
+
+    /// Stop trying to match the saved map: fresh tracking, no map positions this launch.
+    private func abandonRoomMap(reason: String) {
+        guard relocalizingSince != nil else { return }
+        relocalizingSince = nil
+        log("room_map_fallback", reason)
+        session.run(Self.trackingConfig(), options: [.resetTracking, .removeExistingAnchors])
     }
 
     private func startMapping() {
@@ -1479,7 +1541,8 @@ final class FindModel {
         mapViews = 0
         phase = .mapping
         log("map_start", "")
-        say(SpokenLine(text: "Scanning the room. Turn slowly in a full circle. Tap when done.", interrupt: true))
+        say(SpokenLine(text: "Scanning the room. Turn slowly to your right, all the way round. I'll tell you when it's done.",
+                       interrupt: true))
     }
 
     private func stepMapping(_ f: FindFrame) {
@@ -1487,6 +1550,11 @@ final class FindModel {
         let step = planner.update(time: f.time, cameraTransform: f.cameraTransform, busy: mapInFlight >= 2,
                                   speaking: speaker.isSpeaking)
         mapPlanner = planner
+        // Ends by itself after a full circle (Nils, 2026-11-01); waits for views still being listed.
+        if planner.mappingDone {
+            if mapInFlight == 0 { finishMapping(early: false) }
+            return
+        }
         switch step {
         case .wait:
             break
@@ -1527,13 +1595,13 @@ final class FindModel {
         let inventory = mapInventory
         mapPlanner = nil
         phase = .idle
-        log("map_finish", "\(mapViews) views, \(inventory.items.count) items" + (early ? " (tap)" : ""))
+        log("map_finish", "\(mapViews) views, \(inventory.items.count) items" + (early ? " (tap)" : " (auto)"))
         guard !inventory.items.isEmpty else {
             Haptics.warning()
             say(SpokenLine(text: "I didn't find anything to remember. Try again with more light.", interrupt: true))
             return
         }
-        say(SpokenLine(text: "Saving the room.", interrupt: true))
+        say(SpokenLine(text: early ? "Saving the room." : "Done. You can stop turning. Saving the room.", interrupt: true))
         session.getCurrentWorldMap { map, error in
             nonisolated(unsafe) let map = map  // handed to the main actor once, never shared
             let message = error?.localizedDescription

@@ -122,6 +122,55 @@ func tableScene(objectDepth: Float, glossyNoise: Bool = false) -> (DepthImage, S
         #expect(steps.filter { $0 == .scan }.count == 1)
         #expect(steps.last == .giveUp)
     }
+
+    /// Nils, 2026-11-01: the room scan stops by itself after a full circle with enough views; no tap.
+    @Test func roomScanEndsAfterAFullCircle() {
+        var p = ScanPlanner(time: 0)
+        p.budget = 12
+        p.minNewAngle = 30 * .pi / 180
+        var t = 0.0
+        var yaw: Float = 0
+        // Turn right in 15° steps, holding each view 1 s.
+        while yaw < 360, !p.mappingDone {
+            for _ in 0..<30 {
+                t += 1.0 / 30
+                _ = p.update(time: t, cameraTransform: camera(yawDegrees: -yaw), busy: false, speaking: true)
+            }
+            yaw += 15
+        }
+        #expect(p.mappingDone)
+        #expect(p.swept.count == 12)
+        #expect(!p.mappingPrompt(cameraTransform: camera(yawDegrees: 0)).lowercased().contains("tap"))
+    }
+
+    @Test func halfACircleIsNotDone() {
+        var p = ScanPlanner(time: 0)
+        p.budget = 12
+        var t = 0.0
+        for yaw in stride(from: Float(0), through: 180, by: 30) {
+            for _ in 0..<60 {
+                t += 1.0 / 30
+                _ = p.update(time: t, cameraTransform: camera(yawDegrees: -yaw), busy: false, speaking: true)
+            }
+        }
+        #expect(!p.mappingDone)
+    }
+}
+
+@Suite struct SeeThroughTests {
+    /// v9.2 log: the clear glass's LiDAR shape was the table behind it, 35 x 64 cm, for a box about 10 cm wide.
+    @Test func shapeMuchWiderThanThePhotoBoxIsRejected() {
+        let table = ObjectModel(points: [SIMD3(0, 0, 0), SIMD3(0.35, 0, 0), SIMD3(0, 0, 0.64), SIMD3(0.35, 0, 0.64)],
+                                supportHeight: 0, isFlat: true)
+        #expect(!table.fitsBox(0.10))
+    }
+
+    @Test func aNapkinOrABookFits() {
+        let napkin = ObjectModel(points: [SIMD3(0, 0, 0), SIMD3(0.20, 0, 0), SIMD3(0, 0, 0.21), SIMD3(0.20, 0, 0.21)],
+                                 supportHeight: 0, isFlat: true)
+        #expect(napkin.fitsBox(0.12))
+        #expect(napkin.fitsBox(0.22))
+    }
 }
 
 @Suite struct GraspSessionTests {

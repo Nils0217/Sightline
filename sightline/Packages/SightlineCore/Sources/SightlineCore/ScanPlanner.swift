@@ -29,8 +29,16 @@ public struct ScanPlanner: Sendable {
     private var steadySince: Double?
     private var lastScan: Double = -.infinity
     private var lastPrompt: Double
+    /// Compass sectors the camera has pointed at (every frame, not only views sent to Spark/SAM).
+    public private(set) var swept: Set<Int> = []
 
     public init(time: Double) { lastPrompt = time }
+
+    /// Room scan finished without a tap (Nils, 2026-11-01: "shouldn't ask user tap to stop, it should stop
+    /// automatically"): the camera went all round and at least `minMapViews` views were listed, or the
+    /// view budget is used up.
+    public static let minMapViews = 6
+    public var mappingDone: Bool { exhausted || (swept.count >= 12 && used >= Self.minMapViews) }
 
     public var exhausted: Bool { used >= budget }
 
@@ -45,6 +53,8 @@ public struct ScanPlanner: Sendable {
     public mutating func update(time: Double, cameraTransform t: simd_float4x4, busy: Bool, speaking: Bool) -> Step {
         let dir = Self.direction(t)
         defer { lastDirection = dir; lastTime = time }
+        // Level-ish views only: pointing at the floor or ceiling does not cover a compass direction.
+        if abs(dir.y) < 0.8 { swept.insert(Self.sector(dir)) }
         if let prev = lastDirection, let t0 = lastTime, time > t0 {
             let speed = Self.angle(prev, dir) / Float(time - t0)
             if speed < maxTurnSpeed { steadySince = steadySince ?? time } else { steadySince = nil }
@@ -95,7 +105,8 @@ public struct ScanPlanner: Sendable {
     /// Room scan ("scan the room"): always one way round, so the user is never sent back and forth
     /// (v5 test: the search prompts flipped left/right and said "I haven't looked there yet").
     public func mappingPrompt(cameraTransform t: simd_float4x4) -> String {
-        if sectorsCovered >= 11 { return "That's a full circle. Tap when you are done." }
+        // The scan ends by itself (mappingDone), so no line asks for a tap.
+        if swept.count >= 12 { return "Keep turning right, slowly. Almost done." }
         return sectorsCovered <= 1 ? "Turn slowly to your right." : "Keep turning right, slowly."
     }
 
