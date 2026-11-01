@@ -6,7 +6,7 @@
 // end-of-turn, or a partial that ends a sentence (. ? !) unchanged 0.8 s, or any partial unchanged 3 s
 // (short lines like "Stop" often get no end-of-turn). The key is never logged.
 
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 
 nonisolated final class MuseStream: @unchecked Sendable {
@@ -78,13 +78,15 @@ nonisolated final class MuseStream: @unchecked Sendable {
         let ratio = outFormat.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio + 64)
         guard let out = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: capacity) else { return }
-        var used = false
+        // convert(to:error:) calls the input block synchronously on this thread, so these captures are safe.
+        nonisolated(unsafe) let input = buffer
+        nonisolated(unsafe) var used = false
         var error: NSError?
         converter.convert(to: out, error: &error) { _, status in
             if used { status.pointee = .noDataNow; return nil }
             used = true
             status.pointee = .haveData
-            return buffer
+            return input
         }
         guard error == nil, out.frameLength > 0, let ch = out.int16ChannelData else { return }
         let data = Data(bytes: ch[0], count: Int(out.frameLength) * 2)
