@@ -304,6 +304,32 @@ Third follow-up (2026-11-01): Nils's case 1 / case 2. A sure user closes the app
 
 Open points: wrong identity above the verify threshold (fixed in code, device pending); no obstacle map without a support height; the target's own edge named as an obstacle; the map growing several hundred points per second (check what the rolling scan adds); two "Not sure" ends with no double tap.
 
+## T12: v9.2 follow-up + Muse speech on the device (2026-11-01 15:54–16:13 PDT, `logs/v9.2/20261101_145437`, `find_log_1793573677.csv`)
+Build: branch `muse-voice` (v9.2 follow-up + Muse Voice Transcribe). Nils, 11 searches and one room scan.
+
+| Search | Result | Time | Notes |
+|---|---|---|---|
+| "I need my headphone" | Got it | 53 s | Not in view, scan, found 40 cm; 4 directions |
+| "find my iPad" | Got it (2nd check) | 90 s | Spark said no to the lock; 56 s of scanning, then "I'm not sure this is the ipad." and it was |
+| "help me find my cup" (clear glass) | Yes after a double tap | 107 s | 4 cups: "the one on your left or one on the right?"; Nils: "What's different?"; the agent only had positions. LiDAR shape "flat 35x0x64 cm" = the table seen through the glass |
+| "scan the room" | Saved, 26 items | 32 s | Tapped after 3 views because the line said "Tap when done" |
+| "I need napkin" | "Got it" on a cloth | 67 s | SAM's "napkin" was a green cloth; Spark described a receipt in the hand; Nils meant kitchen paper |
+| "like kitchen paper" | Got it | 83 s | Room-map hint used ("last seen ahead, a little to your right") |
+| "I'm thirsty" ×2, "it's not a water bottle", "it's not a … cup" | 2 stopped, 2 got it (143–200 s) | | The agent ran `find_object` on the current view for tumbler and black bottle, which the room scan had saved elsewhere, and offered only what was in view. 3 Spark rejections before the small cup |
+
+- **Saved room map never matched at launch:** `room_map_fallback` 8 s after launch, in this run and in all 5 earlier logged launches (V5 to V9.1.3). Hints only worked after a scan in the same launch.
+- **Hold checks were right:** the clear-glass "Yes" (all spot depth invalid, Spark yes) shows Nils holding the glass. Depth layers say nothing on clear or flat things; Spark carried the checks.
+- **Speech (Muse vs Apple, same audio):** Apple "I need my head", "Scanner room", "Vasala the difference", "The class", "And nap"; Muse got all of these right but repeated words twice ("help help", "don't don't") and heard "Up." where Apple heard nothing.
+
+Changes (2026-11-01, Nils: "scan the room mode shouldn't ask user tap to stop"; "the system doesn't use the scan room saved map"; "doesn't describe the shape or appearance when there're two or more same name object"; "can't the system identify flat, transparent or no color object?"):
+- Room scan ends by itself (`ScanPlanner.mappingDone`: the camera swept all 12 sectors and ≥ 6 views, or 12 views).
+- Relocalization 30 s with spoken outcome; a tap to search ends it.
+- Agent: `find_object` with nothing found returns the room-map place; the instructions say `scan_for` at once.
+- After each find, a labelled-box photo; look-alikes are asked about by appearance.
+- See-through: a LiDAR shape wider than 2.5x the photo box + 5 cm is dropped (`ObjectModel.fitsBox`).
+
+208 tests pass; sim unchanged (positive 20/20, faults 0/20); iOS build succeeds. Device pending.
+
 ## Template
 ```
 ## Tn: <what> (<date> <time>, <log folder>)
