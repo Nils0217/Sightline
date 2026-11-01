@@ -21,11 +21,11 @@ iPhone 15 Pro secured on the chest, indoors, good light, a table within reach. U
 
 | Gesture | Idle | During a task |
 |---|---|---|
-| Tap | Listen ("find my book", "scan the room") | Stop (room scan: finish and save) |
-| Double tap | Listen | "I have it", always: a check; if the check is unsure, your word is taken ("Okay. You have the X.") |
+| Tap | Listen ("find my book", "scan the room") | Stop (room scan: save now; it also stops by itself) |
+| Double tap | Listen | "Is this it?": a check, answered "Yes. That's the X." / "No. The X is still there." / "I can't tell. Hold it up to the camera." |
 | Long press | Measure reach | Measure reach (ends the task) |
 
-VoiceOver on: double tap = "I have it", two-finger double tap = start / stop; swipe up or down for Stop, Status, I have it, Measure reach.
+VoiceOver on: double tap = "Is this it?", two-finger double tap = start / stop; swipe up or down for Stop, Status, Is this it?, Measure reach.
 
 ## Steps
 
@@ -51,7 +51,9 @@ VoiceOver on: double tap = "I have it", two-finger double tap = start / stop; sw
 8f. **Can't tell (2026-11-01).** When you hear "I can't tell. Hold it up to the camera.", hold it in front of the phone: about 3 s later a second check (log `hold_check held_up`), then "Yes. That's the X." or a description of what is in your hand (or how to move it into view) and "Double tap to check again." (log `describe_held_result`). Hold it out of view: expect "I can't see it. Hold it in front of the phone." once. Keep double tapping while it stays unclear: after 2 descriptions, "The camera can't tell. Feel it, or close the app if it's right." (log `check_skipped`), no more calls.
 9. **Far object.** Object about 1 m away: directions still come (no "out of reach"); lean or step as you need.
 10. **Stop.** Tap in each phase (listening, looking, guiding, checking): "Stopped." each time, nothing continues afterwards.
-11. **Room scan.** "scan the room", turn slowly, tap when done: "Saving the room." then "Room saved. …"
+11. **Room scan.** "scan the room", turn slowly to the right all the way round, no tap: after a full circle "Done. You can stop turning. Saving the room." then "Room saved. …" (log `map_finish … (auto)`).
+11a. **Saved room after a relaunch.** Close and reopen the app; at "Ready. To use the saved room, turn slowly and look around first." turn slowly where you scanned. Expect "Saved room found." (log `room_map_relocalized` with the seconds) or after 30 s "I couldn't match the saved room. …" (`room_map_fallback`). Then ask for something the scan saw that is behind you: expect "Your X was last seen …" and the turn toward it, not a search of the current view (agent: `agent_room_hint`).
+11b. **Look-alikes and clear things.** Two glasses (one clear) and a cup: "I'm thirsty", then "What's different?": the question should say how they look (clear, colour, size, what is in them). A clear glass logs `object no model (see-through …)` when LiDAR saw through it.
 12. Export (top right) and copy to `logs/v9/`.
 
 ## Log events to look at (v9.1)
