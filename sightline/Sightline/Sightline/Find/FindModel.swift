@@ -115,6 +115,11 @@ final class FindModel {
     @ObservationIgnored private var userClaimed = false
     /// The last hold-check photo, for `describeHeld`.
     @ObservationIgnored private var lastCheckPhoto: Data?
+    /// Descriptions this search. After `maxDescribes` the camera has had its chance (Nils, 2026-11-01: the
+    /// "Is this it?" loop must end): unsure checks and double taps get `cameraCantTell`, with no API call.
+    @ObservationIgnored private var describes = 0
+    static let maxDescribes = 2
+    static let cameraCantTell = "The camera can't tell. Feel it, or close the app if it's right."
     /// Burst recordings (BurstRecorder.swift): per search and per launch caps.
     @ObservationIgnored private var burstsThisSearch = 0
     @ObservationIgnored private var burstsThisLaunch = 0
@@ -153,6 +158,7 @@ final class FindModel {
         handDistance = nil
         calibrating = false
         lastCheckUnsure = false
+        describes = 0
         phase = .idle
     }
 
@@ -181,6 +187,11 @@ final class FindModel {
             finishRoomScan()
         case .guiding, .grabbing:
             // The answer is "Yes. That's the X." / "No. The X is still there." / "I can't tell. Hold it up to the camera."
+            if lastCheckUnsure, describes >= Self.maxDescribes {
+                log("check_skipped", "describes used")
+                say(SpokenLine(text: Self.cameraCantTell, interrupt: true))
+                return
+            }
             guide?.beginManualCheck()
             startHoldCheck(fromSession: false, reason: "asked")
         case .listening, .locating, .searching, .verifying:
@@ -425,6 +436,12 @@ final class FindModel {
     /// the user how to bring it into view, or what it sees in their hand, so they can judge. 1 Spark call.
     private func describeHeld() {
         guard let noun = targetName, let photo = lastCheckPhoto else { return }
+        guard describes < Self.maxDescribes else {
+            log("describe_skipped", "\(describes) used")
+            say(SpokenLine(text: Self.cameraCantTell, interrupt: true))
+            return
+        }
+        describes += 1
         let id = sessionID, reference = referenceCrop
         log("describe_held", "")
         Task {
