@@ -1,7 +1,7 @@
 // labels: production, needs-review
-// Accessible reach setup and fixed Stop/Status/Check/self-confirm controls.
-// Main area starts when idle and stops every active task; long press always stops.
-// Camera dots and telemetry remain hidden from VoiceOver. Device UI validation is pending.
+// One screen, three gestures (v9, 2026-10-31): tap = start / stop (finish a room scan), double tap =
+// "I have it", long press = measure reach. VoiceOver: activate = double tap's action, magic tap = tap,
+// named actions for the rest. Small buttons are for a sighted helper. Camera dots stay hidden from VoiceOver.
 
 import ARKit
 import RealityKit
@@ -9,98 +9,56 @@ import SwiftUI
 
 struct FindView: View {
     @State private var model = FindModel()
-    @State private var showingSetup = true
-    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack(alignment: .bottom) {
             FindARContainer(model: model).ignoresSafeArea()
             Color.clear.contentShape(Rectangle())
-                .onTapGesture { primaryAction() }
-                .onLongPressGesture(minimumDuration: 0.8) { model.stop() }
+                .onTapGesture(count: 2) { model.doubleTap() }
+                .onTapGesture { model.tap() }
+                .onLongPressGesture(minimumDuration: 0.8) { model.beginReachCalibration() }
                 .accessibilityElement()
                 .accessibilityAddTraits(.isButton)
                 .accessibilityLabel(buttonLabel)
                 .accessibilityValue(model.statusLine())
-                .accessibilityHint("When idle, say what to find. During a task, activate to stop. Separate controls provide status and object checks.")
-                .accessibilityAction { primaryAction() }
-                .accessibilityAction(.magicTap) { primaryAction() }
-                .accessibilityAction(named: "Status") { model.speakStatus() }
+                .accessibilityHint("Two-finger double tap to start or stop.")
+                // VoiceOver's double tap means the same as a double tap without VoiceOver ("I have it"),
+                // so the spoken "Double tap if you have it" holds either way.
+                .accessibilityAction { model.doubleTap() }
+                .accessibilityAction(.magicTap) { model.tap() }
                 .accessibilityAction(named: "Stop") { model.stop() }
-                .accessibilityAction(named: "New search") { model.newSearch() }
-                .accessibilityAction(named: "Check held object") { model.checkHeldObject() }
-                .accessibilityAction(named: "I confirm I have the object") { model.confirmHeldObject() }
+                .accessibilityAction(named: "Status") { model.speakStatus() }
+                .accessibilityAction(named: "I have it") { model.doubleTap() }
+                .accessibilityAction(named: "Measure reach") { model.beginReachCalibration() }
             VStack(spacing: 8) {
                 panel.allowsHitTesting(false)
                 HStack {
                     Button("Stop", systemImage: "stop.fill") { model.stop() }
-                        .accessibilityIdentifier("reach.stop")
                     Button("Status", systemImage: "speaker.wave.2") { model.speakStatus() }
-                        .accessibilityIdentifier("reach.status")
-                    Button("Check", systemImage: "viewfinder") { model.checkHeldObject() }
-                        .disabled(![.guiding, .grabbing].contains(model.phase) || model.safetyMessage != nil || model.needsUserDecision)
-                        .accessibilityIdentifier("reach.check")
-                }
-                .buttonStyle(.borderedProminent)
-                if model.phase == .mapping {
-                    Button("Finish scan and save") { model.finishRoomScan() }
-                        .accessibilityIdentifier("reach.finishScan")
-                }
-                if model.needsUserDecision {
-                    Button("New search") { model.newSearch() }
-                        .accessibilityIdentifier("reach.newSearch")
-                }
-                HStack {
-                    Button("I confirm I have it") { model.confirmHeldObject() }
-                        .disabled(![.guiding, .grabbing, .verifying].contains(model.phase) || model.safetyMessage != nil)
-                        .accessibilityHint("Records your own confirmation, separately from automatic verification.")
-                        .accessibilityIdentifier("reach.userConfirm")
-                    Button("Reach setup") { model.stop(); showingSetup = true; model.explainSetup() }
-                        .accessibilityIdentifier("reach.setup")
+                    Button("I have it", systemImage: "hand.raised.fill") { model.doubleTap() }
+                        .disabled(![.guiding, .grabbing].contains(model.phase))
+                    Button("Reach", systemImage: "ruler") { model.beginReachCalibration() }
                 }
                 .buttonStyle(.bordered)
+                .accessibilityHidden(true)  // the same actions are on the main element
             }
             .padding(.bottom, 12)
-            .background(.ultraThinMaterial)
         }
         .overlay(alignment: .topTrailing) { exportButton }
         .onAppear { model.start() }
-        .accessibilityAction(.magicTap) { primaryAction() }
         .onDisappear { model.pause() }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active, model.reachDistance == nil { showingSetup = true; model.explainSetup() }
-        }
-        .onChange(of: model.reachDistance) { _, distance in
-            if distance != nil { showingSetup = false }
-        }
-        .accessibilityHidden(showingSetup)
-        .overlay {
-            if showingSetup {
-                ReachSetupView(model: model) { showingSetup = false }
-            }
-        }
-    }
-
-    private func primaryAction() {
-        if showingSetup {
-            if model.calibrating { model.stop() }
-            else if model.reachDistance != nil { showingSetup = false }
-            else { model.beginReachCalibration(hand: model.selectedHand) }
-        } else if model.reachDistance == nil, model.phase == .idle {
-            showingSetup = true
-            model.explainSetup()
-        } else { model.tap() }
     }
 
     private var buttonLabel: String {
-        model.phase == .idle || model.phase == .done ? "Speak a command" : "Stop current task"
+        if model.reachDistance == nil { return "Press and hold to measure your reach" }
+        return model.phase == .idle || model.phase == .done ? "Tap and say what to find" : "Tap to stop"
     }
 
     private var panel: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(headline).font(.title3.bold())
-            Text("tap = start or stop · Status button = status · hold = stop").foregroundStyle(.secondary)
-            Text("heard \"\(model.lastHeard)\"")
+            Text("tap = start / stop · double tap = I have it · hold = measure reach").foregroundStyle(.secondary)
+            Text("reach \(model.reachDistance.map { "\(Int($0 * 100)) cm" } ?? "not measured")  heard \"\(model.lastHeard)\"")
             Text("target \(model.targetName ?? "-")  SAM \(model.samCalls)/\(FindModel.maxSAMCalls)  tracking \(model.tracking)")
             Text("hand \(model.handStatus)  hand→target \(model.handDistance.map { String(format: "%.1f cm", $0 * 100) } ?? "-")  guide \(model.guidePhase)")
             Text("said \(model.lastCue)")
@@ -128,76 +86,19 @@ struct FindView: View {
     }
 
     private var headline: String {
+        if model.calibrating { return "Measuring reach — hold still" }
+        if model.reachDistance == nil { return "Hold your hand out, then press and hold" }
         switch model.phase {
-        case .idle: "Tap anywhere and speak"
-        case .listening: "Listening…"
-        case .locating: "Looking for the \(model.targetName ?? "object")…"
-        case .searching: "Scanning — turn slowly"
-        case .guiding: "Guiding to the \(model.targetName ?? "object")"
-        case .grabbing: model.needsUserDecision ? "Not confirmed — confirm yourself, new search, or stop" : "Explore by touch — choose Check after picking up"
-        case .verifying: "Checking what you hold…"
-        case .done: "Done. Tap for a new search"
-        case .mapping: "Scanning — Finish scan to save, Stop to discard"
+        case .idle: return "Tap anywhere and speak"
+        case .listening: return "Listening…"
+        case .locating: return "Looking for the \(model.targetName ?? "object")…"
+        case .searching: return "Scanning — turn slowly"
+        case .guiding: return "Guiding to the \(model.targetName ?? "object")"
+        case .grabbing: return model.lastCheckUnsure ? "Not sure — double tap if you have it" : "At your fingers — pick it up"
+        case .verifying: return "Checking what you hold…"
+        case .done: return "Done. Tap for a new search"
+        case .mapping: return "Scanning the room — tap when done"
         }
-    }
-}
-
-private struct ReachSetupView: View {
-    let model: FindModel
-    var finish: () -> Void
-
-    private func activate() {
-        if model.calibrating { model.stop() }
-        else if model.reachDistance != nil { finish() }
-        else { model.beginReachCalibration(hand: model.selectedHand) }
-    }
-
-    private func close() {
-        model.closeReachSetup()
-        finish()
-    }
-
-    var body: some View {
-        ZStack {
-            Color(.systemBackground).ignoresSafeArea()
-            VStack(spacing: 24) {
-                Button("Close setup", action: close)
-                    .frame(maxWidth: .infinity, minHeight: 60)
-                    .accessibilityIdentifier("reach.setupClose")
-                Button(action: activate) {
-                    VStack(spacing: 24) {
-                        Text(model.calibrating ? "Measuring. Keep still." : "Comfortable reach")
-                            .font(.largeTitle.bold())
-                        Text(model.calibrating ? "Tap anywhere here to stop." : "Secure the phone on your chest. Tap anywhere here to measure. Use one hand and keep your body still.")
-                        Text("Using your \(model.selectedHand) hand. Swipe left for left hand, right for right hand.")
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(model.calibrating ? "Stop measurement" : "Measure comfortable reach")
-                .accessibilityHint("VoiceOver two-finger double tap also starts or stops measurement. Successful measurement closes setup automatically.")
-                .accessibilityIdentifier("reach.calibrate")
-                .simultaneousGesture(DragGesture(minimumDistance: 60).onEnded { value in
-                    guard !model.calibrating, abs(value.translation.width) > abs(value.translation.height) else { return }
-                    model.chooseReachHand(value.translation.width < 0 ? "left" : "right")
-                })
-                HStack {
-                    Button("Left hand") { model.chooseReachHand("left") }
-                    Button("Right hand") { model.chooseReachHand("right") }
-                }
-                .disabled(model.calibrating)
-                Button("Repeat spoken instructions") { model.explainSetup() }
-                    .frame(minHeight: 60)
-            }
-            .padding(24)
-        }
-        .accessibilityAction(.magicTap) { activate() }
-        .accessibilityAction(.escape) { close() }
-        .accessibilityAction(named: "Stop") { model.stop() }
-        .accessibilityAction(named: "Use left hand") { model.chooseReachHand("left") }
-        .accessibilityAction(named: "Use right hand") { model.chooseReachHand("right") }
-        .onLongPressGesture(minimumDuration: 0.8) { close() }
     }
 }
 

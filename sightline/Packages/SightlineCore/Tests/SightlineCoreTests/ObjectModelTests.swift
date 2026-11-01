@@ -147,10 +147,10 @@ func tableScene(objectDepth: Float, glossyNoise: Bool = false) -> (DepthImage, S
             let out = s.update(time: t, hand: grip(lift), cameraTransform: downCamera, targetDepthDelta: 0.005, speaking: false)
             said += out.lines.map(\.text)
         }
-        #expect(said.contains { $0.contains("contact is not confirmed") })
+        #expect(said.contains { $0.hasSuffix("is at your fingers.") })
         #expect(said.last == "Checking.")
         #expect(s.phase == .checking)
-        #expect(s.resolveCheck(true, time: t).first?.text == "Confirmed. You have the phone.")
+        #expect(s.resolveCheck(true, time: t).first?.text == "Got it. You have the phone.")
         #expect(s.phase == .done)
     }
 
@@ -175,8 +175,9 @@ func tableScene(objectDepth: Float, glossyNoise: Bool = false) -> (DepthImage, S
         #expect(asked)
         #expect(s.phase == .checking)
         let reply = s.resolveCheck(false, time: t)
-        #expect(reply.first?.text.hasPrefix("I cannot confirm") == true)
-        #expect(s.phase == .grabbing)
+        // false = SAM still sees it at its spot: say so and guide again.
+        #expect(reply.first?.text == "The phone is still there.")
+        #expect(s.phase == .guiding)
     }
 
     /// Nils, 2026-10-30: the palm gives left/right only, the leading fingertip up/down and forward/back.
@@ -219,7 +220,7 @@ func tableScene(objectDepth: Float, glossyNoise: Bool = false) -> (DepthImage, S
             said += s.update(time: t, hand: hand, cameraTransform: downCamera, targetDepthDelta: 0, speaking: false).lines.map(\.text)
         }
         #expect(!said.contains { $0.lowercased().contains("down") })
-        #expect(said.contains { $0.hasPrefix("Move your hand up") })
+        #expect(said.contains { $0.hasPrefix("Up") || $0 == "A little up." })
     }
 
     /// v6 run: the user grabbed the phone without "Grab it" and no check started. A fingertip that came
@@ -303,5 +304,23 @@ func tableScene(objectDepth: Float, glossyNoise: Bool = false) -> (DepthImage, S
     @Test func restingOnThePalmIsHeld() {
         let palmUnder = HandKeypoints(joints: [.wrist: SIMD3(0.03, -0.03, 0.08), .middleMCP: SIMD3(0.03, -0.03, 0.01)])
         #expect(GraspAssessment.holds(palmUnder, points: phone, centre: centre))
+    }
+
+    /// Rolling scan (v9.2): one scan alone (arm, flying pixels) adds nothing; the same cells twice in a row do.
+    @Test func rollingScanNeedsTwoScansInARow() {
+        var map = ObstacleMap(points: [])
+        let bottle = (0..<5).map { SIMD3<Float>(0.1, 0.03 * Float($0), -0.4) }
+        var last = map.merge(scan: ObstacleMap(points: bottle), previous: nil)
+        #expect(map.points.isEmpty)
+        last = map.merge(scan: ObstacleMap(points: bottle.map { $0 + [0.005, 0, 0] }), previous: last)
+        #expect(map.points.count == 5)
+        _ = map.merge(scan: ObstacleMap(points: [[0.5, 0.1, -0.4]]), previous: last)
+        #expect(map.points.count == 5)
+    }
+    @Test func clustersSplitSeparateThings() {
+        let a = (0..<5).map { SIMD3<Float>(0, 0.03 * Float($0), -0.4) }
+        let b = (0..<4).map { SIMD3<Float>(0.3, 0.03 * Float($0), -0.4) }
+        let c = ObstacleMap(points: a + b + [[0.6, 0, -0.4]]).clusters()
+        #expect(c.count == 2 && c[0].count == 5 && abs(c[0].top - 0.12) < 0.001)
     }
 }

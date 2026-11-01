@@ -125,6 +125,41 @@ nonisolated enum MuseAgent {
                         noun: "room_scan", images: [jpeg], effort: .medium, label: label)
     }
 
+    /// Things standing near the target, marked with numbered red circles on the photo: a short name for each
+    /// (v9.2, Nils: "say there's <name> ahead of you"; the user remembers its shape and size). One call per
+    /// search, effort minimal, never on the guidance loop. Unknown marks are left out.
+    static func nameMarks(jpeg: Data, count: Int, label: String) async throws -> [Int: String] {
+        let text = try await reply("This photo is from a blind user's chest camera. Numbered red circles 1 to \(count) mark things "
+                                   + "standing near the object they are reaching for. For each number, give the short common name "
+                                   + "of the thing under that circle (one or two words, for example bottle, cup, lamp, box). If a "
+                                   + "circle is on nothing, on the table, on a hand or arm, or you are unsure, leave that number out. "
+                                   + #"Answer only with JSON, for example {"1":"bottle","2":"cup"}."#,
+                                   noun: "obstacle_names", images: [jpeg], effort: .minimal, label: label)
+        guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"),
+              let data = String(text[start...end]).data(using: .utf8),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return [:] }
+        var names: [Int: String] = [:]
+        for (k, v) in json {
+            if let i = Int(k), let name = (v as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+               !name.isEmpty, name.split(separator: " ").count <= 3 { names[i] = name }
+        }
+        return names
+    }
+
+    /// The hand has been out of view a while and the user said something (v9.2, Nils: "I need to see your hand
+    /// to guide you", user: ..., LLM: ...). One short spoken answer. `transcript` holds earlier turns.
+    static func handHelp(noun: String, said: String, transcript: [String], label: String) async throws -> String {
+        let earlier = transcript.isEmpty ? "" : "Conversation so far:\n" + transcript.joined(separator: "\n") + "\n"
+        return try await reply("You are the voice of an app that guides a blind user's hand to their \(noun). The phone hangs on "
+                               + "their chest, camera facing forward and down. The camera cannot see their hand now, so the "
+                               + "step-by-step guidance is paused until it can. The hand must be in front of them, below the "
+                               + "phone, roughly toward the \(noun), and not behind or covered by the object. "
+                               + earlier + "The user just said: \"\(said)\"\n"
+                               + "Answer them in one or two short spoken sentences, at most 25 words, plain words, no lists, no "
+                               + "button names. Help them get their hand back in view, or answer what they asked.",
+                               noun: noun, images: [], effort: .minimal, label: label)
+    }
+
     private static func yesNo(_ prompt: String, noun: String, jpeg: Data, label: String) async throws -> Bool? {
         try await yesNo(prompt, noun: noun, images: [jpeg], label: label)
     }

@@ -38,8 +38,8 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `.gitignore` | config, important | Keeps secrets and build output out of git |
 | `.env.example` | config | Template; copy to `.env` and add the key |
 | `.env` (not in git) | sensitive | Real API key; gitignored |
-| `docs/PRD.md` | important | 2026-10-30 revised scope, reach-control contract and validation boundaries |
-| `docs/HUMAN_FACTORS.md` | important, reference, needs-review | Ten findings, implemented behavior, limitations and pending user evaluation |
+| `docs/PRD.md` | important, needs-review | Scope, milestones, risks; "Current find-and-grab behaviour" (v9.1, 2026-10-31) is the current requirement |
+| `docs/HUMAN_FACTORS.md` | obsolete, reference, needs-review | v8 (ChatGPT) human-factors revision, translated; superseded by v9, kept as a record |
 | `docs/SPIKE.md` | important, testing | Current task list and results table |
 | `docs/CLAUDE_CODE_PROMPT.md` | reference | Kickoff prompt used to start Spike 0 |
 | `docs/FILE_LABELS.md` | important, reference | This file |
@@ -47,7 +47,7 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `docs/G1_PLAN.md` | important, testing, verified | G1 hand-accuracy plan v2; gate passed 2026-10-27 |
 | `docs/G2_PLAN.md` | important, testing, verified | G2 mask → 3D target plan; gate passed 2026-10-28 |
 | `docs/G3_PLAN.md` | important, testing, needs-review | G3 world-map relocalization plan and run steps |
-| `docs/FIND_TEST.md` | important, testing, needs-review | Current human-factors revision: setup, fixed controls, device and participant acceptance tests |
+| `docs/FIND_TEST.md` | important, testing, needs-review | v9.1 device test: data files (incl. bursts), gestures, steps, what to note |
 | `docs/TEST_LOG.md` | important, testing, reference | Every device test: issue → root cause → solution → status, timestamped |
 | `docs/ARKIT_SAMPLE.md` | testing, reference | How to run Apple's ARKit sample on the iPhone (S0.1) |
 | `docs/assets/g1_marker_print.pdf` | testing, generated | Printable 10 cm G1 marker |
@@ -57,10 +57,12 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `Packages/SightlineCore/Tests/SightlineCoreTests/Fixtures/` | testing, generated | Real SAM outputs + expected decodes from the Python parser |
 | `Packages/SightlineCore/` | production, needs-review, important | Pure geometry / sampling / stats; unit-tested on Mac |
 | `Packages/SightlineCore/Tests/` | testing, needs-review | Swift Testing suites (`swift test`) |
-| `Packages/SightlineCore/Sources/SightlineCore/HoldVerification.swift` | production, needs-review, important | Bounded identity/motion evidence, short joint history, one horizontal movement, continuous hand/object path veto and terminal uncertainty |
-| `Packages/SightlineCore/Tests/SightlineCoreTests/HoldVerificationTests.swift` | testing, needs-review | Dropouts, missing thumb, wrong identity, independent motion, bounds and no automatic restart |
-| `Packages/SightlineCore/Sources/SightlineCore/ReachSafety.swift` | production, needs-review, important | Reach calibration/profile, fixed frame, staged approach and temporal hold evidence |
-| `Packages/SightlineCore/Tests/SightlineCoreTests/ReachSafetyTests.swift` | testing, needs-review | Reach, stop, obstacles, coherent fingertip and temporal verification regressions |
+| `Packages/SightlineCore/Sources/SightlineCore/HoldVerification.swift` | obsolete, needs-review | v8 multi-observation hold check with a 4 cm movement; unused since v9, kept compiling for its tests |
+| `Packages/SightlineCore/Sources/SightlineCore/HoldCheck.swift` | production, needs-review, important | v9 one-photo hold check helpers: HoldContact (fingertips near the surface), HoldGeometry (held / at spot); v9.1 SpotEvidence (record-only depth at the old spot) |
+| `Packages/SightlineCore/Tests/SightlineCoreTests/HoldVerificationTests.swift` | testing, obsolete, needs-review | Dropouts, missing thumb, wrong identity, independent motion, bounds and no automatic restart |
+| `Packages/SightlineCore/Sources/SightlineCore/ReachSafety.swift` | production, needs-review, important | Reach calibration and profile, staged approach, hand envelope, scene coverage |
+| `Packages/SightlineCore/Tests/SightlineCoreTests/ReachSafetyTests.swift` | testing, needs-review | v9: reach gate, tracking hold/resume, body re-base, obstacle stop/resume/end, turn-then-guide, hold geometry |
+| `Packages/SightlineCore/Tests/SightlineCoreTests/PickupTriggerTests.swift` | testing, needs-review | v9.1: object-centred pick-up trigger (no check without contact; leave, rise, lost; stall hint), BodyScale, SpotEvidence |
 | `Packages/SightlineCore/Sources/SightlineCore/GuidanceSession.swift` | production, needs-review, important | Local find-and-grab state machine (opening lines, hand prompt, stop-and-go, pick-up); shared by app and simulator |
 | `Packages/SightlineCore/Sources/SightlineCore/HandModel.swift` | production, needs-review, important | Six hand keypoints; reach guidance selects one physical fingertip and retains it through brief occlusion |
 | `Packages/SightlineCore/Sources/SightlineCore/ObjectModel.swift` | production, needs-review, important | Visible target shape/support, provisional grip geometry, capsule obstacle screen and conservative hold decision |
@@ -72,6 +74,7 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `Sightline/Sightline/SightlineApp.swift` | production | App entry |
 | `Sightline/Sightline/ContentView.swift` | production, needs-review | Root screen; Find + G1/G2/G3 tabs |
 | `Sightline/Sightline/Find/` | production, needs-review, important | Find-and-grab session: command → SAM lock → hand guidance |
+| `Sightline/Sightline/Find/BurstRecorder.swift` | testing, needs-review, important | v9.1 burst recording around each hold check (2 s before + 2 s after, 10 Hz; ≤ 5 per search, ≤ 30 per launch) for tuning thresholds |
 | `Sightline/Sightline/Audio/` | production, needs-review | On-device speech input, spoken output, proximity tones |
 | `Sightline/Sightline-Info.plist` | config, production | Extra Info.plist keys (file sharing) merged into the generated plist |
 | `Sightline/Sightline/API/` | production, needs-review, sensitive | Meta Model API client, call log, key reader |

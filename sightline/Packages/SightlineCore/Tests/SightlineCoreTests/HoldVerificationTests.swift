@@ -1,4 +1,5 @@
-// labels: testing, needs-review
+// labels: testing, obsolete, needs-review
+// Tests HoldVerification.swift, obsolete since v9 (kept as a record; the app no longer uses it).
 import Testing
 import simd
 @testable import SightlineCore
@@ -110,12 +111,16 @@ import simd
     }
     @Test func negativeVerdictWaitsForUserInsteadOfRestartingChecks() {
         var s = GuidanceSession(targetName: "phone", target: [0, 0, -0.4], cameraTransform: matrix_identity_float4x4, time: 0)
-        s.beginManualCheck(); _ = s.resolveCheck(nil, time: 1)
-        #expect(s.awaitingUserDecision)
+        // v9: "not sure" goes back to grabbing and asks for a double tap; the hand resting at the
+        // spot does not start another check by itself.
+        s.beginManualCheck()
+        #expect(s.resolveCheck(nil, time: 1).map(\.text) == ["Not sure. Double tap if you have it."])
         for i in 2..<100 {
             let out = s.update(time: Double(i), hand: hand([0, 0, -0.4]), cameraTransform: matrix_identity_float4x4,
-                               targetDepthDelta: 0.2, speaking: false)
-            #expect(out.lines.isEmpty && !out.requestCheck && out.toneDistance == nil)
+                               targetDepthDelta: nil, speaking: false)
+            #expect(!out.requestCheck)
+            // After 20 s without a pick-up it guides again (v9.1: no dead end), so tones may return.
+            if i < 21 { #expect(out.toneDistance == nil) }
         }
     }
     @Test func overshootIsDetectedWithoutRequestingMoreMovement() {

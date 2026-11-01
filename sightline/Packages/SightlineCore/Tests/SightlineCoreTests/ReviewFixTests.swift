@@ -14,20 +14,22 @@ import Testing
             for spark: Bool? in [true, false, nil] {
                 let (result, reason) = HoldDecision.decide(held: held, atSpot: atSpot, spark: spark)
                 if held {
-                    #expect(result == nil && reason == .held)
+                    // SAM sees it in the hand; Spark can only veto (layers disagree: not sure).
+                    #expect(reason == .held)
+                    #expect(result == (spark == false ? nil : true))
                     continue
                 }
                 switch atSpot {
                 case true?:
-                    // Spark yes disagrees with SAM: not sure (v7 key bunch).
+                    // Spark yes disagrees with SAM: not sure (v7 key bunch). Otherwise "still there".
                     #expect(reason == .stillAtSpot)
                     #expect(result == (spark == true ? nil : false))
                 case false?:
                     #expect(reason == .goneFromSpot)
-                    #expect(result == nil)
+                    #expect(result == (spark == true ? true : nil))
                 case nil:
                     #expect(reason == .sparkOnly)
-                    #expect(result == nil)
+                    #expect(result == (spark == true ? true : nil))
                 }
             }
         }
@@ -78,10 +80,10 @@ import Testing
         #expect(s.phase == .checking)
         let lines = s.checkTimedOut(time: t)
         #expect(s.phase == .grabbing)
-        #expect(lines.first?.text.hasPrefix("I cannot confirm") == true)
+        #expect(lines.first?.text == "Not sure. Double tap if you have it.")
     }
 
-    /// After `maxAutoChecks` the session only says once to tap.
+    /// After `maxAutoChecks` the session only says once to double tap.
     @Test func automaticChecksAreCapped() {
         var s = GuidanceSession(targetName: "phone", target: object.centre, object: object, cameraTransform: downCamera, time: 0)
         s.maxAutoChecks = 2
@@ -99,8 +101,8 @@ import Testing
                 if out.requestCheck { checks += 1; _ = s.resolveCheck(false, time: t) }
             }
         }
-        #expect(checks == 1)
-        #expect(s.awaitingUserDecision)
+        #expect(checks == 2)
+        #expect(said.filter { $0 == "Double tap if you have it." }.count == 1)
     }
 
     /// v6 run 2: the hand hovered ~7 cm over the phone and single-frame fingertip depth jumps (±6 cm)

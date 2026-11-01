@@ -53,6 +53,12 @@ struct Scenario {
     var kind = ObjectKind.phone
     /// Something standing between the hand and the object (bottle-sized), world x, z.
     var obstacleXZ: SIMD2<Float>?
+    /// Things on the table beside the path (world x, z), cup-sized: must not stop the hand.
+    var clutterXZ: [SIMD2<Float>] = []
+    /// The user's hand and arm are already out (on the table, right of the object) in the lock frame.
+    var armAtLock = false
+    /// Put down after the lock photo: only the rolling scan can see it (v9.2).
+    var lateObstacleXZ: SIMD2<Float>?
     /// Camera yaw (degrees, + = right) at the start; the object may be out of view (scan phase).
     var startYaw: Float = 0
     /// How the user holds the hand when first asked (world, m), relative to straight ahead.
@@ -138,6 +144,15 @@ let scenarios: [Scenario] = {
     s = Scenario(name: "obstacle", note: "a bottle stands between hand and phone (warning expected)")
     s.obstacleXZ = SIMD2(0.05, -0.42)
     list.append(s)
+    s = Scenario(name: "clutter", note: "cups 22 cm either side of the path, noisy table, flying pixels")
+    s.clutterXZ = [SIMD2(-0.12, -0.5), SIMD2(0.4, -0.45)]
+    list.append(s)
+    s = Scenario(name: "arm_at_lock", note: "hand and arm already resting on the table in the lock photo")
+    s.armAtLock = true
+    list.append(s)
+    s = Scenario(name: "late_obstacle", note: "a bottle put down between hand and phone after the lock photo (rolling scan)")
+    s.lateObstacleXZ = SIMD2(0.05, -0.42)
+    list.append(s)
     s = Scenario(name: "not_in_view", note: "phone 70° to the right: scan while the user turns")
     s.startYaw = -70
     list.append(s)
@@ -214,6 +229,54 @@ func handJoints(palm: SIMD3<Float>) -> [HandJoint: SIMD3<Float>] {
         .indexTip: palm + f * 0.11 - r * 0.03, .middleTip: palm + f * 0.12 - r * 0.005,
         .ringTip: palm + f * 0.11 + r * 0.02, .littleTip: palm + f * 0.09 + r * 0.04,
     ]
+}
+
+/// The lock frame's depth points as the app sees them (v9.1): the table with 7 mm noise, the object,
+/// the scenario's obstacle and clutter, the user's arm if it is out, and isolated flying pixels. The app
+/// and the simulator both turn them into a map with `ObstacleMap.scene`. Before v9.1 the simulator handed
+/// the session a clean bottle-only map, while the device used a live frame with the user's own arm in it.
+func lockScene(_ sc: Scenario, cam: Camera, rng: inout RNG, live: [HandJoint: SIMD3<Float>]? = nil) -> [SIMD3<Float>] {
+    var pts: [SIMD3<Float>] = []
+    let c = sc.object
+    for i in stride(from: Float(-0.7), through: 0.7, by: 0.02) {
+        for k in stride(from: Float(-0.7), through: 0.4, by: 0.02) {
+            pts.append(SIMD3(c.x + i, tableY + rng.gauss(0.007), c.z + k))
+        }
+    }
+    pts += objectPoints(sc)
+    func cylinder(_ xz: SIMD2<Float>, height: Float) {
+        for i in 0...12 { for a in 0..<10 {
+            let ang = Float(a) / 10 * 2 * .pi
+            pts.append(SIMD3(xz.x + 0.035 * cos(ang), tableY + 0.01 + Float(i) / 12 * height, xz.y + 0.035 * sin(ang)))
+        } }
+    }
+    if let o = sc.obstacleXZ { cylinder(o, height: 0.22) }
+    if live != nil, let o = sc.lateObstacleXZ { cylinder(o, height: 0.22) }
+    for o in sc.clutterXZ { cylinder(o, height: 0.10) }
+    if let joints = live {
+        // Rolling scan: the user's hand and arm where they are now, wrist to the right shoulder.
+        pts += joints.sorted { $0.key.rawValue < $1.key.rawValue }.map(\.value)  // fixed order: same run every launch
+        if let wrist = joints[.wrist] {
+            let shoulder = SIMD3<Float>(0.18, 1.35, 0.05)
+            for i in 0...30 {
+                let p = wrist + (shoulder - wrist) * Float(i) / 30
+                for a in 0..<6 { let ang = Float(a) / 6 * 2 * .pi; pts.append(p + SIMD3(0.04 * cos(ang), 0.04 * sin(ang), 0)) }
+            }
+        }
+    } else if sc.armAtLock {
+        // Palm on the table 25 cm right of the object; forearm and upper arm up to the right shoulder.
+        let palm = SIMD3(c.x + 0.25, tableY + 0.03, c.z + 0.1)
+        pts += handJoints(palm: palm).values
+        let shoulder = SIMD3<Float>(0.18, 1.35, 0.05)
+        for i in 0...30 {
+            let p = palm + (shoulder - palm) * Float(i) / 30
+            for a in 0..<6 { let ang = Float(a) / 6 * 2 * .pi; pts.append(p + SIMD3(0.04 * cos(ang), 0.04 * sin(ang), 0)) }
+        }
+    }
+    for _ in 0..<60 {  // flying pixels: single points in the air around the object
+        pts.append(c + SIMD3(rng.uniform(-0.4, 0.4), rng.uniform(0, 0.3), rng.uniform(-0.4, 0.3)))
+    }
+    return pts.filter { cam.sees($0) }.map { cam.perceived($0, biasPerMetre: sc.biasPerMetre) }
 }
 
 /// Visible-surface points of a box-shaped object (top face; for tall ones also the face toward the user).
@@ -301,6 +364,9 @@ struct SimUser {
     var groped = false
     var lift: Float = 0
     var promptsHeard = 0
+    /// Holding it after "Not sure": double taps for a check.
+    var wantsCheck = false
+    var doubleTaps = 0
     /// Body yaw (radians, + = right), same convention as Camera.
     var facing: Float = 0
     /// Still to turn (radians, + = right) after "Turn a little to your left/right, to face it."
@@ -321,8 +387,8 @@ struct SimUser {
     }
 
     private mutating func act(on text: String, scenario sc: Scenario, rng: inout RNG, time: Double, target: SIMD3<Float>) {
-        if text.hasPrefix("Keep your body still. Show only") || text.hasPrefix("Hold your hand") || text.hasPrefix("Reach your hand") || text.hasPrefix("I lost your hand")
-            || text.hasPrefix("I can't see") {
+        if text.hasPrefix("Good. Hold your hand") || text.hasPrefix("Hold your hand") || text.hasPrefix("Reach your hand") || text.hasPrefix("I lost your hand")
+            || text.hasPrefix("I can't see") || text.hasPrefix("I need to see your hand") {
             promptsHeard += 1
             if sc.handOutOfViewFirst && promptsHeard == 1 {
                 plan = .raising(SIMD3(-0.1, 0.55, -0.15))  // too low and too close: out of view
@@ -347,7 +413,10 @@ struct SimUser {
             return
         }
         if text.hasPrefix("Stop. The ") || text.hasPrefix("Stop. It's at your hand") { plan = .grabbing(at: time + 0.8); return }
-        if text.hasPrefix("Stop your hand") { plan = .idle; return }
+        if text.hasPrefix("It's right below your hand") { plan = .grabbing(at: time + 0.8); return }
+        if text.hasPrefix("Stop your hand") || text.hasPrefix("Stop. Something") || text.hasPrefix("Stop. A ") || text == "Hold still." { plan = .idle; return }
+        if text.hasPrefix("Go slowly") || text.hasPrefix("Careful.") || text.contains(" ahead. Go around") || text.contains("is ahead.") || text.hasPrefix("Something's ahead.")
+            || text.hasPrefix("Go around it") || text.hasPrefix("Lift your hand over") { return }  // knows where it is; waits for the next direction
         if text.hasPrefix("Move your hand and the object") {
             let direction: SIMD3<Float>
             if text.contains(" right,") { direction = [1, 0, 0] }
@@ -363,7 +432,15 @@ struct SimUser {
         if text == "Stop." { groped = false }
         if text == "Stop." { plan = .idle; return }
         if text.hasPrefix("Got it") || text.hasPrefix("Tap the screen") || text == "Checking." { return }
-        if text.hasPrefix("I don't think you have") { gripped = false; lifted = false; lift = 0; return }
+        if text.hasPrefix("I don't think you have") || text.hasSuffix("is still there.") { gripped = false; lifted = false; lift = 0; return }
+        // "Not sure. Double tap if you have it.": someone holding it double taps.
+        // At most twice: a real user gives up on double tapping after that. In the fault scenarios the
+        // user does not really hold the target (wrong object, nothing moved, ...), so they never claim it:
+        // those runs test the automatic check alone, and a self-confirmation there would hide a miss.
+        if text.hasPrefix("Not sure") || text.hasPrefix("Double tap") {
+            if doubleTaps < 2, gripped && lifted, sc.holdFault == .none { doubleTaps += 1; wantsCheck = true }
+            return
+        }
         if let (dir, dist) = Self.parseMove(text) {
             let d = dist * (1 + rng.uniform(-sc.userDistanceError, sc.userDistanceError))
             // People drift a little off the axis they were told.
@@ -441,6 +518,12 @@ struct RunResult {
     var scans: Int
     var checks: Int
     var transcript: [String]
+    /// Episodes in which a hand joint went into the obstacle or a clutter cup (would knock it).
+    var hits = 0
+    /// Meaningless-situation detectors (v9.1): longest silence while guiding or grabbing (s), and a line
+    /// said 3+ times within 10 s (chatter loop).
+    var longestSilence: Double = 0
+    var loops = 0
 }
 
 func run(_ sc: Scenario, seed: UInt64, maxTime: Double = 150) -> RunResult {
@@ -453,12 +536,16 @@ func run(_ sc: Scenario, seed: UInt64, maxTime: Double = 150) -> RunResult {
     var keypointSum = 0, frames = 0
     var missAtGrab: Float?
     var warnings = 0, scans = 0, checks = 0
+    var hits = 0, touchingObstacle = false, guidedMove = false
     let dt = 1.0 / 30
     var t = 0.0
     var outcome = "timeout"
 
     func note(_ t: Double, _ s: String) { log.append(String(format: "%6.2f  %@", t, s)) }
+    var said: [(time: Double, text: String, phase: GuidanceSession.Phase)] = []
+    var sayPhase = GuidanceSession.Phase.waitingForHand
     func say(_ line: SpokenLine, _ t: Double) {
+        said.append((t, line.text, sayPhase))
         speech.say(line, time: t)
         note(t, "SAY  \(line.text)" + (line.interrupt ? "  [interrupts]" : ""))
     }
@@ -526,45 +613,47 @@ func run(_ sc: Scenario, seed: UInt64, maxTime: Double = 150) -> RunResult {
     let shift = cam.xAxis * sc.targetOnlyBias
     let seenPoints = objectPoints(sc).map { cam.perceived($0, biasPerMetre: sc.biasPerMetre) + shift }
     let object = ObjectModel(points: seenPoints, supportHeight: tableY, isFlat: sc.kind != .bottle)
-    let obstacles = sc.obstacleXZ.map { o in
-        ObstacleMap(points: (0...6).flatMap { i in (0...3).map { k in
-            SIMD3(o.x - 0.035 + Float(k) * 0.023, tableY + 0.03 + Float(i) * 0.035, o.y + 0.035) } })
-    }
+    let camPos = SIMD3(cam.transform.columns.3.x, cam.transform.columns.3.y, cam.transform.columns.3.z)
+    let obstacles = ObstacleMap.scene(lockScene(sc, cam: cam, rng: &rng), object: object, camera: camPos)
     var session = GuidanceSession(targetName: sc.kind.rawValue, target: object.centre, object: object, obstacles: obstacles,
-                                  cameraTransform: cam.transform, time: t, reachProfile: ReachProfile(maximumDistance: 0.85))
+                                  cameraTransform: cam.transform, time: t, reachProfile: ReachProfile(maximumDistance: 0.50))  // a typical measured reach; distance no longer ends a search
     for line in session.opening { say(line, t) }
-    var verification: HoldVerification?
-    var verificationStarted: Double?
-    var pendingEvidence: (due: Double, observation: HoldObservation)?
-    var captureAt: Double?
-    var movementPlan: HoldMovementPlan?
-    var movementBaseline: HandKeypoints?
-    var movementCapture: HoldMovementCapture?
-    var movementRequested = false
-    var activeMovementContext: HoldMovementContext?
+    // As the app: one Spark look names the things in the lock map (simulated: always right).
+    func nameThings() {
+        session.nameObstacles(session.obstacleClusters.map { c in
+            let things = (sc.obstacleXZ.map { [($0, "bottle")] } ?? []) + (sc.lateObstacleXZ.map { [($0, "bottle")] } ?? [])
+                + sc.clutterXZ.map { ($0, "cup") }
+            let name = things.first { simd_length(SIMD2(c.centre.x, c.centre.z) - $0.0) < 0.08 }?.1 ?? ""
+            return (c.centre, name)
+        })
+    }
+    nameThings()
+    var lastRolling = t
+    var pendingCheck: (due: Double, held: Bool, atSpot: Bool?, spark: Bool?)?
     var frozenFaultHand: HandKeypoints?
     var faultStartedAt: Double?
-    var trace = HandTrace()
+    var unclear = 0
+    var claimed = false
 
-    func captureEvidence(hand: HandKeypoints?) -> HoldObservation {
+    /// One check photo, as the app does it: SAM (where is it now) + Spark (is the hand holding it).
+    func captureCheck(hand: HandKeypoints?) -> (held: Bool, atSpot: Bool?, spark: Bool?) {
         checks += 1
         let holding = user.gripped && user.lifted
-        let shift = SIMD3<Float>(0, holding ? user.lift : 0, 0) + user.verificationOffset
         let now: SIMD3<Float>
         switch sc.holdFault {
-        case .handOnly: now = sc.object
+        case .handOnly, .wrongObject: now = sc.object  // the target stays where it was
         case .slideOnly: now = sc.object + user.verificationOffset
-        default: now = sc.object + shift
+        default: now = sc.object + SIMD3<Float>(0, holding ? user.lift : 0, 0) + user.verificationOffset
         }
-        let objectShift = now - sc.object
         let samSees = !rng.chance(sc.samMiss) && cam.sees(now)
-        let identity: Bool? = samSees ? (sc.holdFault == .wrongObject ? false : !rng.chance(sc.sparkWrong)) : nil
-        let points = objectPoints(sc).map { cam.perceived($0 + objectShift, biasPerMetre: sc.biasPerMetre) }
+        let points = objectPoints(sc).map { cam.perceived($0 + (now - sc.object), biasPerMetre: sc.biasPerMetre) }
         let near = samSees && HoldContact.near(hand: hand, points: points, centre: now)
-        let away = simd_distance(now, sc.object) >= 0.05 && now.y - sc.object.y >= 0.03
-        note(t, "EVIDENCE n \(checks) sam \(samSees) identity \(identity.map(String.init) ?? "unknown") near \(near) away \(away)")
-        return HoldObservation(time: t, object: samSees ? now : nil, hand: hand, identity: identity,
-                               nearHand: near, awayFromOriginal: away, surface: samSees ? points : [])
+        let (held, atSpot) = HoldGeometry.classify(candidate: samSees ? now : nil, original: sc.object, supported: true, nearHand: near)
+        // Spark: is the hand holding that object (true only for a real lift of the target).
+        let truth = holding && [.none].contains(sc.holdFault)
+        let spark = rng.chance(sc.sparkWrong) ? !truth : truth
+        note(t, "CHECK sam \(samSees) near \(near) held \(held) atSpot \(atSpot.map(String.init) ?? "nil") spark \(spark)")
+        return (held, atSpot, spark)
     }
 
     while t < maxTime {
@@ -599,7 +688,7 @@ func run(_ sc: Scenario, seed: UInt64, maxTime: Double = 150) -> RunResult {
         if user.lifted { depthDelta = (sc.kind == .bottle ? 0.25 : sc.kind.size.y) + rng.gauss(0.005) }
         else if simd_length(user.palm - sc.object) < 0.1, cam.depth(user.palm) < cam.depth(sc.object) { depthDelta = -0.1 }
 
-        if sc.holdFault == .objectOnly, verification != nil {
+        if sc.holdFault == .objectOnly, session.phase == .checking || pendingCheck != nil {
             if frozenFaultHand == nil { frozenFaultHand = hand }
             hand = frozenFaultHand
         }
@@ -608,95 +697,85 @@ func run(_ sc: Scenario, seed: UInt64, maxTime: Double = 150) -> RunResult {
             user.verificationOffset = SIMD3(min(0.08, Float(t - (faultStartedAt ?? t)) * 0.04), 0, 0)
             hand = HandKeypoints(joints: gripJoints(sc, lift: 0).mapValues { $0 + user.verificationOffset })
         }
-        trace.append(time: t, hand: hand)
-        let observed = trace.hand(at: t)
+        // Ground truth: did a joint go into the obstacle / a cup (the sim has no collision response)?
+        let solids = (sc.obstacleXZ.map { [($0, Float(0.23))] } ?? []) + (sc.lateObstacleXZ.map { [($0, Float(0.23))] } ?? [])
+            + sc.clutterXZ.map { ($0, Float(0.11)) }
+        let inside = solids.contains { xz, height in
+            user.joints(sc).values.contains { j in
+                simd_length(SIMD2(j.x, j.z) - xz) < 0.045 && j.y < tableY + height
+            }
+        }
+        // Counted once guidance has given a direction: the user placing the hand at the start is not guided.
+        if inside && !touchingObstacle && guidedMove {
+            hits += 1
+            let j = user.joints(sc).first { j in solids.contains { simd_length(SIMD2(j.value.x, j.value.z) - $0.0) < 0.045 && j.value.y < tableY + $0.1 } }
+            note(t, "HIT obstacle " + (j.map { String(format: "%@ %.2f,%.2f,%.2f map pts within 6 cm: %d", $0.key.rawValue, $0.value.x, $0.value.y, $0.value.z,
+                                                     session.obstaclePoints(near: $0.value, radius: 0.06)) } ?? ""))
+        }
+        touchingObstacle = inside
+        let observed = hand
+        // Rolling scan about once a second while guiding, as the app does.
+        if t - lastRolling >= 1, session.phase == .guiding {
+            lastRolling = t
+            let pts = lockScene(sc, cam: cam, rng: &rng, live: user.joints(sc))
+            session.addScan(ObstacleMap.scene(pts, object: object, camera: camPos), hand: hand, cameraTransform: cam.transform)
+            nameThings()
+        }
+        sayPhase = session.phase
         let out = session.update(time: t, hand: hand, cameraTransform: cam.transform,
                                  targetDepthDelta: depthDelta, speaking: speech.speaking)
         for line in out.lines {
             say(line, t)
             if line.text.hasPrefix("Stop. The ") { missAtGrab = object.distanceToSurface(user.palm) }
-            if line.text.contains("blocks the hand") { warnings += 1 }
+            if line.text.contains("in the way") { warnings += 1 }
+            if SimUser.parseMove(line.text) != nil { guidedMove = true }
         }
         let slideCheck = sc.holdFault == .slideOnly && user.gripped && simd_length(user.verificationOffset) >= 0.05
-        if out.requestCheck || slideCheck, verification == nil {
-            if !out.requestCheck { session.beginManualCheck() } // simulated explicit Check while pushing
-            verification = HoldVerification()
-            verificationStarted = t
-            pendingEvidence = (t + 2, captureEvidence(hand: observed))
+            && session.phase != .checking && pendingCheck == nil && checks == 0
+        if user.wantsCheck, session.phase == .guiding || session.phase == .grabbing, pendingCheck == nil {
+            user.wantsCheck = false
+            session.beginManualCheck()  // double tap: "I have it"
+            claimed = true
+            let c = captureCheck(hand: observed)
+            pendingCheck = (t + 2, c.held, c.atSpot, c.spark)
+        } else if out.requestCheck || slideCheck, pendingCheck == nil {
+            if !out.requestCheck { session.beginManualCheck() }
+            let c = captureCheck(hand: observed)
+            pendingCheck = (t + 2, c.held, c.atSpot, c.spark)
         }
-        if movementPlan != nil, movementCapture == nil, !speech.speaking,
-           let baseline = movementBaseline, let plan = movementPlan {
-            movementCapture = HoldMovementCapture(baseline: baseline, delta: plan.delta, started: t)
+        if let c = pendingCheck, t >= c.due {
+            pendingCheck = nil
+            let (result, reason) = HoldDecision.decide(held: c.held, atSpot: c.atSpot, spark: c.spark)
+            note(t, "DECIDE \(result.map(String.init) ?? "nil") \(reason.rawValue)")
+            // As in the app: a double tap that the photo cannot settle is the user's own confirmation.
+            if result == nil, claimed { outcome = "self_confirmed"; note(t, "USER CONFIRMED"); break }
+            claimed = false
+            if result == nil { unclear += 1 }
+            session.resolveCheck(result, time: t).forEach { say($0, t) }
         }
-        if let context = activeMovementContext,
-           let failure = context.failure(hand: observed, camera: cam.transform, profile: ReachProfile(maximumDistance: 0.85),
-                           obstacles: obstacles ?? ObstacleMap(points: []), canSee: cam.sees) {
-            note(t, "MOVEMENT_VETO \(failure.rawValue)")
-            outcome = "uncertain"
-            session.resolveCheck(nil, time: t).forEach { say($0, t) }
-            break
-        }
-        if let capture = movementCapture, capture.overLimit(hand: observed) {
-            outcome = "uncertain"
-            session.resolveCheck(nil, time: t).forEach { say($0, t) }
-            break
-        }
-        if let capture = movementCapture, capture.ready(time: t, hand: observed) {
-            movementCapture = nil; movementPlan = nil
-            say(SpokenLine(text: "Stop your hand. Checking the evidence.", interrupt: true), t)
-            captureAt = t
-        }
-        if let due = captureAt, t >= due, pendingEvidence == nil {
-            captureAt = nil
-            pendingEvidence = (t + 2, captureEvidence(hand: observed))
-        }
-        if let c = pendingEvidence, t >= c.due, var collector = verification {
-            pendingEvidence = nil
-            let result = collector.add(c.observation)
-            verification = collector
-            note(t, "CHECK \(result)")
-            switch result {
-            case .confirmed:
-                session.resolveCheck(true, time: t).forEach { say($0, t) }
-            case .uncertain:
-                session.resolveCheck(nil, time: t).forEach { say($0, t) }
-                outcome = "uncertain"
-            case .collect:
-                if collector.latestAnchor != nil, !movementRequested, trace.isSteady(at: t) {
-                    let now = sc.object + SIMD3(0, user.lift, 0) + user.verificationOffset
-                    if let observed, let plan = HoldMovementPlan.make(object: now, hand: observed, camera: cam.transform,
-                        profile: ReachProfile(maximumDistance: 0.85), obstacles: obstacles ?? ObstacleMap(points: []), surface: objectPoints(sc).map { $0 + SIMD3(0, user.lift, 0) + user.verificationOffset }, canSee: cam.sees) {
-                        movementRequested = true
-                        movementPlan = plan; movementBaseline = observed
-                        activeMovementContext = HoldMovementContext(baseline: observed, object: now,
-                            surface: objectPoints(sc).map { $0 + SIMD3(0, user.lift, 0) + user.verificationOffset }, delta: plan.delta)
-                        say(SpokenLine(text: plan.phrase, interrupt: true), t)
-                    } else {
-                        note(t, "MOVEMENT_VETO no_clear_plan")
-                        outcome = "uncertain"
-                        session.resolveCheck(nil, time: t).forEach { say($0, t) }
-                    }
-                } else {
-                    say(SpokenLine(text: "Keep your hand still. Taking one more look.", interrupt: true), t)
-                    captureAt = t + 0.4
-                }
-            }
-        }
-        if outcome == "uncertain" { break }
-        if let since = verificationStarted, t - since >= 35, session.phase == .checking {
-            outcome = "uncertain"
-            session.resolveCheck(nil, time: t).forEach { say($0, t) }
-            break
-        }
-        if session.pauseReason != nil { outcome = "paused"; break }
+        if session.endReason != nil { outcome = "ended"; break }
         if session.phase == .done { outcome = "done"; break }
         if session.phase == .gaveUp { outcome = "gave up"; break }
     }
-    let ok = outcome == "done" && user.lifted
+    if outcome != "done", outcome != "self_confirmed", unclear > 0 { outcome = "uncertain" }
+    // A fault run is never a success by self-confirmation (see the double-tap rule above).
+    let ok = (outcome == "done" || (outcome == "self_confirmed" && sc.holdFault == .none)) && user.lifted
     note(t, "END  \(outcome); palm to surface at grab: " + (missAtGrab.map { String(format: "%.1f cm", $0 * 100) } ?? "-"))
+    // Silence: gaps between lines while the session was guiding or grabbing (the user is left waiting).
+    var silence = 0.0
+    for (a, b) in zip(said, said.dropFirst()) where a.phase == .guiding || a.phase == .grabbing {
+        silence = max(silence, b.time - a.time)
+    }
+    if let last = said.last, last.phase == .guiding || last.phase == .grabbing, outcome == "timeout" { silence = max(silence, t - last.time) }
+    var loops = 0
+    for (i, a) in said.enumerated() where a.text != "Stop." {  // "Stop." ends each step: normal
+        let same = said[i...].prefix { $0.time - a.time <= 10 }.filter { $0.text == a.text }.count
+        if same >= 3 { loops += 1 }
+    }
     return RunResult(success: ok, outcome: outcome, seconds: t, lines: speech.started.count, cutOff: speech.cut,
                      trueMissAtGrab: missAtGrab, keypointsSeen: frames == 0 ? 0 : Double(keypointSum) / Double(frames),
-                     warnings: warnings, scans: scans, checks: checks, transcript: log)
+                     warnings: warnings, scans: scans, checks: checks, transcript: log, hits: hits,
+                     longestSilence: silence, loops: loops)
 }
 
 // MARK: - CLI
@@ -708,7 +787,8 @@ if args.first == "replay" {
     exit(0)
 }
 let verbose = args.contains("-v")
-args.removeAll { $0 == "-v" }
+let flagged = args.contains("--flagged")
+args.removeAll { $0 == "-v" || $0 == "--flagged" }
 var seed: UInt64?
 var runs = 20
 if let i = args.firstIndex(of: "--seed"), i + 1 < args.count { seed = UInt64(args[i + 1]); args.removeSubrange(i...i + 1) }
@@ -719,17 +799,30 @@ if chosen.isEmpty {
     exit(1)
 }
 
-print("Synthetic results only; paused is reported separately from a completed grasp.")
-print("scenario         ok   paused unclear median_s  lines  miss_cm  keypts  warn  scans  checks  note")
+print("Synthetic results only; ended (out of reach / blocked) is reported separately from a completed grasp.")
+print("ok counts self_confirmed (double tap the photo could not settle); self = how many of ok")
+print("wrong_object / hand_only / object_only / slide_only: ok means a wrong \"Got it\" (should be 0/20)")
+print("hits = times a hand went into the obstacle or a cup (ground truth; should be 0)")
+print("silent = runs with > 12 s of silence while guiding/grabbing; loop = runs with a line said 3+ times in 10 s")
+print("scenario         ok   self ended  unclear median_s  lines  miss_cm  keypts  warn  hits silent loop  scans  checks  note")
 for sc in chosen {
     let seeds: [UInt64] = seed.map { [$0] } ?? (1...UInt64(runs)).map { $0 }
     let results = seeds.map { run(sc, seed: $0) }
     if verbose { for r in results { print("--- \(sc.name)"); r.transcript.forEach { print($0) } } }
+    // --flagged: transcripts of runs with a meaningless situation only.
+    if flagged {
+        for (i, r) in results.enumerated() where r.longestSilence > 12 || r.loops > 0 || r.hits > 0 {
+            print(String(format: "--- %@ seed %d silence %.1f loops %d hits %d", sc.name, i + 1, r.longestSilence, r.loops, r.hits))
+            r.transcript.filter { $0.contains("SAY") || $0.contains("HIT") || $0.contains("END") }.forEach { print($0) }
+        }
+    }
     func median(_ v: [Double]) -> Double { v.isEmpty ? .nan : v.sorted()[v.count / 2] }
     let ok = results.filter(\.success)
     let misses = results.compactMap(\.trueMissAtGrab).map { Double($0) * 100 }
-    print(sc.name.padding(toLength: 16, withPad: " ", startingAt: 0) + String(format: " %2d/%-2d %4d  %4d  %8.1f  %5.1f  %7.1f  %6.1f  %4.1f  %5.1f  %6.1f  %@",
-                 ok.count, results.count, results.filter { $0.outcome == "paused" }.count, results.filter { $0.outcome == "uncertain" }.count, median(ok.map(\.seconds)), median(results.map { Double($0.lines) }),
+    print(sc.name.padding(toLength: 16, withPad: " ", startingAt: 0) + String(format: " %2d/%-2d %4d %4d  %4d  %8.1f  %5.1f  %7.1f  %6.1f  %4.1f  %4d  %4d  %4d  %5.1f  %6.1f  %@",
+                 ok.count, results.count, results.filter { $0.outcome == "self_confirmed" && $0.success }.count,
+                 results.filter { $0.outcome == "ended" }.count, results.filter { $0.outcome == "uncertain" }.count, median(ok.map(\.seconds)), median(results.map { Double($0.lines) }),
                  median(misses), median(results.map(\.keypointsSeen)), median(results.map { Double($0.warnings) }),
-                 median(results.map { Double($0.scans) }), median(results.map { Double($0.checks) }), sc.note as NSString))
+                 results.filter { $0.hits > 0 }.count, results.filter { $0.longestSilence > 12 }.count,
+                 results.filter { $0.loops > 0 }.count, median(results.map { Double($0.scans) }), median(results.map { Double($0.checks) }), sc.note as NSString))
 }

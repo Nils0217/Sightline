@@ -1,4 +1,4 @@
 <!-- labels: important, config -->
 @AGENTS.md
 
-取物修訂與驗收：依 AGENTS.md 的 Current reach-control contract，閱讀 `docs/HUMAN_FACTORS.md` 與 `docs/FIND_TEST.md`。
+For find-and-grab changes, follow the "Current find-and-grab contract (v9.1, with the v9.2 additions)" in AGENTS.md and use `docs/FIND_TEST.md` for acceptance.

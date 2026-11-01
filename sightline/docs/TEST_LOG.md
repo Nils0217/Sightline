@@ -168,6 +168,136 @@ Build: T8 fixes. Searches: "I want my key" (done by tap after 94 s), "Can you he
 
 ---
 
+## v8: reach-control revision by a ChatGPT session (2026-10-30, code only; obsolete)
+
+Written in Chinese by ChatGPT; translated here, original in the `chatgpt-reach` branch (commit 93766c8). Not a device or user test.
+
+| Item | v8 change | Status then |
+|---|---|---|
+| Reach | Comfortable index-finger reach measured; target, waypoint and per-axis end gates; re-measure after background | code only |
+| Motion | One real fingertip; flat objects up / across / down; near edge and tactile exploration | code only |
+| Obstacles | Current point cloud; active and next axis checked; capsule clearance; shared forearm approximation | code only, not a full avoidance guarantee |
+| Failure stops | Tracking, rotation/translation, stalled frames, background, hand loss all latch a stop; a new search is needed | code only |
+| Hold check | Two-frame identity + shared motion; one model, a vanished object or a still object never succeeds | code only, no real cloud calls |
+| Controls | Fixed Stop / Status / Check / self-confirm / save-scan; cancellation tokens per session and check | code only |
+| Wording | Says contact is not confirmed; "move your hand"; names the object on success | code only |
+
+Bounded-confirmation round: at most 3 observations (3 SAM + 3 identity calls, 35 s), 2 identity-positive with ≥ 2 common fingertips moving with the object, one requested 4 cm horizontal movement, then self-confirm / New search / Stop. Its checks: 169 tests in 33 suites passed; iOS source type-check passed (full xcodebuild was blocked by its sandbox). Its simulator (seeds 1–10): normal 4/10, index_hidden 2/10, bottle_centered 4/10 completed; obstacle 10/10 stopped; wrong_object, hand_only, object_only, slide_only 0/10 false successes.
+
+2026-10-31 device note: a screenshot showed the forced setup sheet staying up after a successful measurement; v8 changed it to an overlay that closes itself.
+
+## T10: v9 find-and-grab redo (2026-10-31, code, simulator and build; not yet on the device)
+
+Nils on v8: "having the pre set up is a good idea, but the whole process is a piece of shit user experience, and the voice instruction is crumbled." Decision: keep the safety base, redo the flow and the voice (branch `v9-ux`; v8 snapshot in `chatgpt-reach`, commit 93766c8).
+
+| # | Issue in v8 | Root cause | Fix | Status |
+|---|---|---|---|---|
+| 10.1 | Spoken lines ran 30–75 words ("Secure the phone on your chest … To exit setup, hold the screen, or use the VoiceOver escape gesture.") | Every line carried instructions for every control plus disclaimers | One action per line, ≤ ~8 words: "Right, 20 centimetres.", "Stop. The book is at your fingers.", "Not sure. Double tap if you have it." | fixed (code) |
+| 10.2 | Lines cut each other off | 40 lines interrupted; `stop()` said "Stopped. Keep your hand still. Tap to speak a new command." even when called internally (re-measure, background, new search) | Silent `cancel()` for internal use; only Stop, obstacles and check results interrupt | fixed (code) |
+| 10.3 | Voice told a blind user to "Choose Check" / "Tap the main area" | Seven on-screen controls | Tap = start/stop, double tap = "I have it", long press = measure reach; VoiceOver: activate = double tap, magic tap = tap | fixed (code) |
+| 10.4 | Guidance died and needed a new search | Stops latched on tracking not normal, a camera change > 15° / 6 cm (breathing, turning), a frame without an obstacle map, and edge-of-view targets | Tracking: "Hold still." and resume; camera change: re-base the frame; no obstacle map: skip the check that frame; edge of view: ask to turn, then guide | fixed (code) |
+| 10.5 | Pick-up check (Nils, v7: any pick-up checks at once) limited to 1, then manual Check; 4 cm movement test; up to 3 photos / 35 s | v8 hold-verification contract | Back to v7: any pick-up checks, one photo, SAM + Spark in parallel, `HoldDecision`; ≤ 6 automatic checks | fixed (code) |
+| 10.6 | Reach re-measured after every background | v8 rule | Measured once, saved in UserDefaults; long press re-measures | fixed (code) |
+| 10.7 | "Not the X. Put it down." when the user had not picked anything up | `false` means SAM still sees it at its spot | "The X is still there." and guide again | fixed (code) |
+| 10.8 | "I can't see your hand." repeated 8× in 30 s while gripping | Reset on any single visible frame; also said while grabbing (Vision drops gripping hands) | Only while guiding, after 1 s, once until the hand is back for 1 s | fixed (code) |
+| 10.9 | Obstacle ends the search (sim `obstacle` 0/20) | Stop on obstacle is kept (safety base); no detour | Resumes when the path is clear for 1 s; ends after 8 s blocked | open: detour not built |
+| 10.10 | Docs in Chinese (README, PRD, TEST_LOG, FIND_TEST, HUMAN_FACTORS, SPIKE, api-notes) and an AGENTS.md contract overriding Nils's decisions | ChatGPT session | Back to English; AGENTS.md v9 contract, v8 marked obsolete; HUMAN_FACTORS.md marked obsolete | fixed |
+
+### Checks
+
+- Unit tests: **170 passed in 33 suites** (`swift test`). Tests for v8 latching rewritten to v9 behaviour (tracking resumes, body turn re-bases, obstacle stop/resume/end, turn-then-guide, still-there); HoldVerificationTests kept and marked obsolete.
+- iOS build: `xcodebuild … -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO` **BUILD SUCCEEDED**.
+- Simulator (20 seeds each, same scenarios as v8 plus the four negatives), v8 → v9 completed runs:
+
+| Scenario | v8 | v9 | v9 median s |
+|---|---|---|---|
+| normal | 8/20 | 20/20 | 27.9 (v8 49.9) |
+| index_hidden | 4/20 | 20/20 | 29.2 |
+| shared_bias / target_bias | 13/20, 9/20 | 20/20, 20/20 | 29.3, 29.2 |
+| sloppy_user / late_hand | 10/20, 10/20 | 20/20, 20/20 | 35.7, 37.5 |
+| flaky_tracking / ruler | 7/20, 6/20 | 20/20, 20/20 | 45.8, 30.7 |
+| bottle_side / bottle_centered | 0/20, 9/20 | 20/20, 20/20 | 32.6, 18.5 |
+| loose_grip / sam_blind | 8/20, 2/20 | 20/20, 20/20 | 27.9, 27.8 |
+| not_in_view | 0/20 | 20/20 | 39.5 |
+| spark_wrong (Spark wrong 50%) | 1/20 | 15/20 (5 unsure) | 29.6 |
+| grab_unasked | 1/20 | 17/20 (2 unsure) | 38.1 |
+| obstacle | 0/20 (stopped) | 0/20 (ended) | – |
+| wrong_object / hand_only / object_only / slide_only | 0/20 each | 0/20 each (no false success) | – |
+
+The simulated user double taps at most twice after "Not sure" and each double tap runs a check; in the app the double tap after "Not sure" is the user's own confirmation, so the app would finish the unsure runs as `user_confirmed`. Synthetic results only.
+
+## T10.1: v9.1 object-centred trigger and body scale (2026-10-31, code, simulator and build; not yet on the device)
+
+Nils rejected the v9 lift trigger ("LiftDetector"): a hand put down and lifted without touching anything still counted as a pick-up, and "2 cm below the table" made no physical sense. He then added: "all cm distinguishers must not be absolute, but modified by the user's hand reach measure." After two ChatGPT critiques, the plan was: object-centred trigger, record-only spot evidence, consistent double tap, body-scaled thresholds, burst recording.
+
+| # | Issue | Root cause | Solution | Checked by | Status |
+|---|---|---|---|---|---|
+| 10.1.1 | A hand moving down and up away from the object triggered a check | LiftDetector looked at the hand only | Check only after a contact candidate (≥ 2 tips within a hand-sized 4 cm of the object), then leave / rise / lost; LiftDetector and PickupDetector marked obsolete | PickupTriggerTests `handOnTheTableAwayFromTheObjectDoesNotTrigger`, `handHiddenWithoutContactDoesNotTrigger` | Fixed (unit) |
+| 10.1.2 | Fixed centimetre thresholds ignore body size | Constants | `BodyScale`: arm thresholds × reach / 52 cm, hand thresholds × hand length / 18 cm, clamped 0.6–1.5; hand length measured with the reach | BodyScaleTests (5) | Built; numbers unverified on people |
+| 10.1.3 | Tall bottles never checked (sim 0/20) once leaving was required | Fingertips stay inside a tall object's outline when it is lifted straight up | `near_then_rose`: a reach-scaled 5 cm rise above the lowest hand point near the object, held 0.2 s | `contactThenRiseChecks`; sim bottle_side / bottle_centered 20/20 | Fixed (sim) |
+| 10.1.4 | grab_unasked stuck repeating "Keep going left" (sim 0–2/20) | Grip dropouts broke the "near" history; no way out when the hand stalls | Dropout-tolerant near history (last 3 samples); one "Double tap if you have it." per search when the hand stalls, never an automatic check | `stalledHandGetsOneHintAndNoCheck`; sim 19/20 | Fixed (sim) |
+| 10.1.5 | Double tap meant two things | v9: "check" before "Not sure", "confirm" after | Always "I have it": a check; unsure → the claim is accepted (`user_confirmed`) | Build; sim `self` column | Built |
+| 10.1.6 | Sim fault scenarios looked like successes (object_only 20/20, slide_only 18/20) after 10.1.5 | The simulated user double tapped in runs where they did not really hold the target, and the self-confirmation counted as ok | Sim user claims only when truly holding the target; fault runs never count self-confirmation as ok | Sim: all four fault scenarios 0/20 | Fixed (sim reporting) |
+| 10.1.7 | No real data to set thresholds | Single-frame diagnostics | Record only: `spot_evidence` (vacated / occupied / occluded / invalid at the old spot) and a 2 s + 2 s burst at 10 Hz per check (≤ 5 per search, ≤ 30 per launch, ~2 MB each) | Build only | Waiting for device data |
+| 10.1.8 | Device: object found, then "It's out of reach. Move closer, then search again." with no guidance | The gate compared the straight line from the chest camera (including the ~50 cm drop to the table) with a reach measured with the hand held out ahead; the spoken "N centimetres" is horizontal, so the two disagreed. The simulator used the 0.85 m maximum reach and never hit it | Compare the horizontal distance with the reach; allow a drop down to 1.2 × reach and a rise up to 0.5 × reach (guesses). Sim now uses a 0.62 m reach (arm straight out); with 0.50 m every scenario but bottle_centered ended out of reach, since the sim table objects are ~57 cm away horizontally | `tableObjectBelowTheChestIsWithinReach`; sim back to the table above | Fixed (unit, sim); device recheck needed. Open: "comfortably" may measure a bent arm, too short for table objects |
+| 10.1.9 | Nils: "I don't care how far the object is, it must guide" | The reach gate ended the search | Distance never ends a search; the reach only scales thresholds and picks staged waypoints. A waypoint beyond reach falls back to the straight path only if the object is within reach (with a 50 cm sim reach the fallback sent hands sideways out of view: normal 11/20) | `objectBeyondReachIsStillGuided`; sim with a 50 cm reach back to the table above | Fixed (unit, sim) |
+| 10.1.10 | Sim: 117 s of silence after the hand left the view | "I can't see your hand." was said once and never again while the hand stayed gone | Repeat it every 10 s while gone (first one interrupts, repeats do not) | Sim; tests | Fixed (sim) |
+| 10.1.11 | Device: every search said "Stop. Something's in the way." with nothing there, then ended | The app built a new obstacle map from the full depth frame every frame: it held the user's own arm and sleeve (only a 20 cm forearm guess was removed), the other hand, the body, and flying pixels at the hand's edge; one point was enough. The simulator never fed this map (it used a clean bottle-only map), so it could not show the failure | One map from the lock frame (before the hand comes in), built by `ObstacleMap.scene` (shared by app and simulator): 3–50 cm above the table, away from the body (arm-scaled 25 cm) and the target's edge (hand-scaled 4 cm), single cells dropped; the arm removed once when the hand appears; points the hand passes through carved; a block needs 3 points, and only moves that bring a hand part closer count | Tests `strayPointAndOwnArmDoNotStop`, `sceneKeepsRealThingsOnly`, `besideAnObstacleTheHandCanMoveAway`; new sim scenarios clutter, arm_at_lock (0 warnings) | Fixed (unit, sim); device recheck needed |
+| 10.1.12 | An obstacle stopped the hand, then nothing useful happened | v9 waited, then ended the search; the first v9.1 build said "Go slowly" and guided straight into it | Go around: another axis of the remaining move, a sideways shift that still lands on the object, back toward the body, or up and over (then stay above it); only if none is clear, "Go slowly. Something is on your left." once and guide on. "Stop." only interrupts a move that is heading into it; a blocked next move is planned at rest | Sim obstacle 20/20 complete; `obstacleAtRestIsGoneAroundNotInto` | Fixed (sim); 7/20 still touch the bottle (see open issues) |
+| 10.1.13 | Meaningless situations found by new simulator detectors (silence > 12 s, a line 3+ times in 10 s, hand into an obstacle) | Several | "A little left." / "Stop." x7: small final moves now run to 1 cm. 24 s silence with a flickering hand: the current move is repeated after 8 s of silence. "Left" / "Keep going left" every 3 s for 100 s: after a stall, 8 s quiet. Six rounds of "still there": automatic checks pause after two in a row. "Stop. Something's in the way." / "Go slowly." alternating: told once per obstacle and hand position, "Go slowly." at most every 10 s. A detour planned per frame flipped between two moves: detours are committed until done. 20 s without a pick-up ended the search: now "Let's try again." and guidance | Sim columns `hits`, `silent`, `loop`; `--flagged` prints those runs | Fixed (sim) |
+| 10.1.14 | Nils's review of the below-8/10 list (2026-10-31): touching things is normal, time to the object is the KPI; name obstacles and say which side to pass; rolling scan; "It's right below your hand."; talk when the hand is gone; a held object was not noticed and the spot was not looked at again | Design | v9.2: no stop and no planned detour by default (`maxDetours = 0`; sim obstacle 33.7 s median vs 55.6 s with 6 detours, a touch in 17/20 vs 5/20). One Spark look names the lock-map things (numbered marks). Pass side: the side the object is on, else away from it, else fewer things (geometry, not the LLM: it must answer within a frame). Rolling scan every 1 s, a cell joins when seen twice in a row, arm and hand removed. Stall (same direction 4 times) and an empty spot (LiDAR, objects ≥ 3 cm thick, after the spot was seen full) start a check. Hand gone ~11 s: "I need to see your hand to guide you." then up to 3 spoken turns with Spark. 20 s on the object: "It's right below your hand." every 10 s | New sim scenario `late_obstacle`; 198 tests | Fixed (sim), device pending |
+
+### Checks
+
+- `swift test`: 191 tests passed (new: PickupTriggerTests 6, BodyScaleTests 5, SpotEvidenceTests 6, reach 2, obstacle 4 rewritten/added). Sim reach 0.50 m.
+- Simulator after 10.1.11–13 (20 seeds; the lock scene now has a noisy table, flying pixels, and, per scenario, a bottle, cups or the user's arm): all positive scenarios 20/20 (grab_unasked 20/20, 5 self-confirmed); obstacle 20/20 complete, 0 searches ended, hand touched the bottle in 7/20; clutter and arm_at_lock 20/20 with 0 warnings; fault scenarios 0/20; silence > 12 s: slide_only 2/20; chatter: grab_unasked 1/20.
+- `xcodebuild` generic iOS, no signing: BUILD SUCCEEDED.
+- Simulator, 20 seeds each (synthetic only; `self` = how many of ok were the user's own confirmation after an unsure check):
+
+| Scenario | ok | self | Median s |
+|---|---|---|---|
+| normal / index_hidden | 20/20, 20/20 | 1, 1 | 29.4, 29.2 |
+| shared_bias / target_bias | 20/20, 20/20 | 0, 1 | 29.0, 29.3 |
+| sloppy_user / late_hand | 20/20, 20/20 | 1, 0 | 34.4, 38.2 |
+| flaky_tracking / ruler | 20/20, 20/20 | 0, 0 | 41.6, 30.0 |
+| bottle_side / bottle_centered | 20/20, 20/20 | 3, 3 | 34.0, 24.1 |
+| loose_grip / sam_blind | 20/20, 20/20 | 1, 1 | 29.4, 27.7 |
+| not_in_view | 20/20 | 0 | 38.9 |
+| spark_wrong (Spark wrong 50%) | 20/20 | 6 | 32.7 |
+| grab_unasked | 19/20 | 6 | 41.1 |
+| obstacle | 0/20 (20 ended) | – | – |
+| wrong_object / hand_only | 0/20 each (6 checks, no false success) | – | – |
+| object_only / slide_only | 0/20 each (16 and 18 unsure) | – | – |
+
+Honest limits: the simulator's hand and object are idealised, so 20/20 says the logic chains together, not that the thresholds fit real hands. The scaling reference values (52 cm reach, 18 cm hand) and the 0.6–1.5 clamp are guesses to be replaced from the bursts. Spot evidence does not affect any result yet. The strict thumb rule (`GraspAssessment.holds()`) is still unused: the trigger is relaxed, success is still decided by the photo check.
+
+### Next device run (v9.1): what to watch
+
+- First launch: one sentence, long press measures, "Reach N centimetres."; relaunch does not ask again.
+- Lines are short and do not cut each other; no button names spoken.
+- Turning the body or a tracking blip does not end the search.
+- Picking anything up → "Checking." within a second; results use the three short lines.
+- Double tap after "Not sure" finishes (`user_confirmed` in the log).
+- Hand put down and lifted near, but not on, the object: no "Checking." (v9.1).
+- Bottle lifted straight up: "Checking." (`near_then_rose`).
+- Burst folders appear in diagnostics, at most 5 per search.
+
+## T11: v9.2 on the device (2026-10-31 18:17–18:32 PDT, `logs/V9.1.3/20261031_181659`, `find_log_1793495819.csv`)
+
+**Reference run (Nils): the last mug search is the current success.** The thing found was not a mug: a white utensil holder with a handle (whisk, wooden spoon and spatula in it) on a cluttered dresser; SAM called it "mug" at 0.84, above the 0.75 Spark-verify threshold, so identity was never checked, and the hold check compared against the same wrong reference. Nils counts it as a success of the flow. "Where's my mug": not in view, turn, found at 120 cm (8.1 s), "I see your hand." (16.9 s), one direction "Forward, 85 centimetres.", "Stop. The mug is at your fingers. Feel for the side." (26.7 s), lift, "Checking." (`near_then_rose`), "Got it. You have the mug." (34.4 s). 7 lines, no obstacle line, no repeat. Later versions must not be slower or wordier than this.
+
+| Search | Result | Time | Notes |
+|---|---|---|---|
+| book | Not sure, no double tap | — | "Something is ahead. Go around it on your left." then "A book is ahead. Go around it on your right.": the second "book" is likely the target's own edge or a second book (Spark named mark 3 "book", 5 cm tall). Rolling scan grew the map 573 -> 909 points in 10 s |
+| phone | Not sure, no double tap | — | 45 s to lock (agent). "A roll is ahead." named by Spark |
+| sanitizer / hand spray | Got it (`gone_from_spot`) | 59.7 s | "I can't see your hand." 3 times while reaching 10–15 cm away |
+| key | Got it after a stall check (`stalled`, v9.2) | 110.7 s (68 s scanning) | "Hold your hand out." 3 times; "Something is ahead." with the key 14 cm away |
+| mug | **Got it (`held`)** | **34.4 s** | Reference run |
+
+Also in the mug search: `support none`, so there was no obstacle map at all next to a glass pitcher and bottles; the first direction was one 85 cm move.
+
+Open points: wrong identity above the verify threshold; no obstacle map without a support height; the target's own edge named as an obstacle; the map growing several hundred points per second (check what the rolling scan adds); two "Not sure" ends with no double tap.
+
 ## Template
 ```
 ## Tn: <what> (<date> <time>, <log folder>)
@@ -176,98 +306,3 @@ Build `<commit>`. <who tested, how long, what was searched>.
 | # | Issue | Root cause | Solution | Checked by | Status |
 |---|---|---|---|---|---|
 ```
-
-
-## 人因與取物控制修訂（2026-10-30，程式驗證；尚未實機驗證）
-
-這次依使用者提出的十項問題，調整本機控制、介面與文件。原有未提交修改在開始前另存快照，既有測試紀錄保留；本節不是新增的 iPhone 或真人測試結果。
-
-| 項目 | 修正 | 狀態 |
-|---|---|---|
-| 可及範圍 | 舒適食指距離量測、目標／路點／實際逐軸終點界線、背景後重測；量測含獨立逾時 | fixed (code)，待實機 |
-| 人體動作 | 同一實際指尖；平面物件抬高／橫移／下降；近側邊緣與觸覺探索 | fixed (code)，待人因評估 |
-| 障礙 | 當前點雲；正在執行與下一候選軸均檢查；含端點的膠囊間距；共用前臂近似與自身排除；深度不足保留未知 | fixed (code)，不是完整避障保證 |
-| 失效停止 | tracking、旋轉／位移、無新影格、背景、手消失均有停止處理；定位恢復需新搜尋 | fixed (code)，待實機 |
-| 持有確認 | 兩影格語意比對及共同移動；缺參考、單模型、物件消失、靜止或矛盾證據不成功；先播完提示再拍第二張 | fixed (code)，未呼叫真實雲端驗證 |
-| 身份影像 | 每個候選保存自己的來源影格與裁圖；不再將被否定的候選在放棄時拿來引導 | fixed (code)，待實機 |
-| 控制與取消 | 固定 Stop／Status／Check／自行確認／掃描儲存；取消麥克風、每個 await 後核對任務；影格含 session/check token | fixed (code)，待 VoiceOver |
-| 語句 | 說明接觸尚未確認；明說移動手；成功說明物件身份；不確定後不導向舊位置 | fixed (code)，待使用者回饋 |
-
-### 已完成驗證
-
-- 修改前基準：125 項 Swift Testing 測試通過。
-- 修改後：145 項測試、32 個 suite 全部通過，其中 ReachSafetyTests 新增 20 項，涵蓋伸手界線、分階段接近、追蹤與方向停止、手消失、活躍軸障礙、逐軸中間終點、前臂模型、深度未知與持有共同位移。
-- iOS 17 arm64 目標：SightlineCore 模組編譯與全部 App Swift 原始碼型別檢查通過，包含 Observation 與 SwiftUI 巨集；使用專案的 MainActor 隔離設定。這不是已封裝的 App 建置。
-- 完整 xcodebuild：未完成。專案本機 Swift package 的 manifest sandbox 在此執行環境回報 `sandbox_apply: Operation not permitted`；不將此寫成程式編譯失敗或成功。直接使用 SDK 的原始碼檢查已完成。
-- `git diff --check` 通過。
-- 兩軸獨立審查提出的活躍軸、超界中間終點、未知深度、自身前臂、第二影格時序、取消重開麥克風、候選圖片錯配與參考缺失均已修正。
-- 合成模擬器已改用新版語句與兩影格共同移動判定；完成取物與停止分開呈現。單一固定 seed 的 normal 完成、obstacle 停止；完整批次結果另列於本節後續紀錄。
-
-### 尚未完成
-
-- iPhone 上的深度、姿態、動態障礙、校準及長時段音訊。
-- VoiceOver 全流程、App 中斷／返回及真實網路逾時。
-- 新版兩影格 API 延遲與實際帳單成本。
-- 視障使用者共同設計、原有方法比較、疲勞和外援評估。
-
-下一次實機測試依 FIND_TEST.md，不套用舊版 tap=check 或自動「Grab it」步驟。
-
-完整模擬第一批（十五情境、各二十次）揭露短暫指尖缺失會反覆換點並重設靜止計時；已改成保留同一指尖直到持續缺失。瓶子情境也揭露過早側移可能離開畫面；立體物件改先對齊深度。這兩項各新增回歸測試，後續批次結果另列，不沿用原批次成功率。
-
-瓶子確認的另一限制是握瓶時掌心容易超出胸前相機視野；兩影格共同移動改成必須使用兩次都可見的同一個實際手指關節，而不強制要求掌心。關節不同或缺失時仍不確認，不因放寬可見部位而降低物件身份／共同位移門檻。
-
-### 最後針對性模擬（新版，固定 seeds 1–3）
-
-| 情境 | 自動完成取物 | 鎖定停止 | 說明 |
-|---|---|---|---|
-| normal | 2/3 | 0/3 | 一次未在時限內取得足夠確認證據 |
-| index_hidden | 3/3 | 0/3 | 食指 70% 掉點，參考點保留修訂後可繼續 |
-| bottle_side | 0/3 | 3/3 | 目標超過二十度，先放下手、面向物件並重新搜尋；停止不算取物成功 |
-| bottle_centered | 2/3 | 0/3 | 模擬重新面向瓶子後的新搜尋；一次未完成確認 |
-| obstacle | 0/3 | 3/3 | 障礙否決動作，停止不算取物成功 |
-
-這是合成資料，不是真人結果。較少自動成功是保留不確定的結果之一，不能宣稱所有場景均能可靠取物。模擬器尚未代替使用者在無法確認時選擇自行確認，也沒有測量真正的網路、左右手分類與硬體誤差。
-
-瓶子案例排查也修正了模擬器的感測模型：最低有效關節數從四個改成與實機 HandKeypointLocator 相同的兩個；原本錯誤的硬編碼 phone 名稱改成各情境的真實名稱。未為提高成功率而放寬實際持有門檻。
-
-
-## 有限次確認修訂：保留證據、一次水平動作、明確出口
-
-本輪依使用者採納的六項方案實作，不新增真人測試結果。取代上一輪兩張固定配對與重試抬高流程。
-
-- 身份改為比對原參考與當前畫框候選；持有使用本機共同位移與接近證據，沒有把拇指可見當必要條件，也沒有放寬四公分接近門檻。
-- 最多三次影格請求／三次 SAM 與三次身份比對，總時限三十五秒；其中兩次身份肯定、至少兩個共同實際指尖與物件共同移動才確認。中間漏檢保留 anchor 與其自身表面。
-- 同一關節一百五十毫秒內可補掉點；穩定需檢查整個窗口，不只比較首尾。自然移動先觀察，不另加動作。
-- 若仍需動作，最多提示一次四公分水平移動，不再累積向上抬高。動作／提示播放／雲端等待期間持續查新深度、障礙、持物可見表面、共同指尖、視野、伸手距離、反向及七公分上限。
-- 未確認後 Check 停用、GuidanceSession 停止自動再啟動；固定提供自行確認、New search、Stop。逾時與晚結果也不能重啟。
-- 模擬器共享 collector、短歷史、動作規劃與否決，身份真值不再等同持有；加入 wrong_object、hand_only、object_only、slide_only。
-
-### 程式驗證
-
-- **169 項 Swift Testing 測試、33 個 suite 通過**；相對上一輪新增 24 項確認回歸測試。
-- iOS 17 arm64：核心模組編譯與 App 全部 Swift 原始碼型別檢查通過。完整 Xcode 包裝／簽章／真機安裝未驗證，原環境套件沙盒限制仍未以完整建置重測。
-- git diff --check 通過。
-- 兩軸審查找到並修正：提示與雲端等待時監控中斷、只有一共同指尖未停止、持物邊緣漏查、anchor 表面錯配、首尾相同的來回移動誤判穩定、反向動作漏查，以及模擬身份與持有混用。
-
-### 合成結果（seeds 1–10）
-
-| 情境 | 自動完成 | 明確無法確認 | 停止 |
-|---|---|---|---|
-| normal | 4/10 | 6/10 | 0/10 |
-| index_hidden | 2/10 | 8/10 | 0/10 |
-| bottle_centered | 4/10 | 6/10 | 0/10 |
-| obstacle | 0/10 | 0/10 | 10/10 |
-| wrong_object | 0/10 | 10/10 | 0/10 |
-| hand_only | 0/10 | 10/10 | 0/10 |
-| object_only | 0/10 | 10/10 | 0/10 |
-| slide_only（明確按 Check） | 0/10 | 10/10 | 0/10 |
-
-slide_only 以模擬使用者按 Check 的整合案例驗證，讓未抬離支撐面的滑動確實進入 collector，而非只等待抓取逾時。四類反例合計四十次皆未自動確認成功，且均明確結束為無法確認。
-
-原失敗 seed 的最後追蹤：normal seed 3 在 53.47 秒取得第二次肯定與共同位移並完成；bottle_centered seed 1 第一張 SAM 漏檢，第三張注入身份否定，在 33.10 秒明確結束，不繼續抬高／重試到 150 秒。後者不是取物成功，模型拒絕仍可能降低可用性。
-
-這些是合成的模型漏檢、身份錯誤與關節誤差，不是真實 API 或 iPhone 數據。四個反例採可控制真值，不代表對真實同類物件誤認有零風險保證。自動成功率仍不足；保留不確定改善了退出行為，沒有證明產品已可靠。
-
-### 待實機
-
-VoiceOver 的終態選擇、按 Stop／New search 後的雲端取消隔離、真實身份提示品質、深度／姿態誤差、有限次觀測的延遲與費用，以及視障使用者疲勞與原有取物方法比較。

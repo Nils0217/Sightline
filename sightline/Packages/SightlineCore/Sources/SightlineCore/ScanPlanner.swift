@@ -73,7 +73,7 @@ public struct ScanPlanner: Sendable {
 
     // Shared spoken lines (app and simulator).
     public static func startLine(_ noun: String) -> String {
-        "I don't see the \(noun) here. Turn slowly to your left and right. I'll keep looking."
+        "I don't see the \(noun) here. Turn slowly."
     }
     public static let promptLine = "Still looking. Keep turning slowly."
 

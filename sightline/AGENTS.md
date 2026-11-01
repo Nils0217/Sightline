@@ -15,16 +15,21 @@ Native iOS app, Swift + SwiftUI + ARKit. Target device: iPhone 15 Pro (LiDAR, A1
 
 Muse Code works on a branch per task (`muse/<task>`); Claude reviews before merge.
 
-## Current reach-control contract (2026-10-30)
-When changing guidance, perception, audio, controls, or verification, read `docs/HUMAN_FACTORS.md` and use `docs/FIND_TEST.md` for acceptance cases. These replace the earlier point-guidance and single-image hold assumptions below.
-- Measure a comfortable reach after each mounting/background cycle; gate targets and waypoints.
-- Keep one real fingertip and a fixed direction frame; use staged tabletop approach and let observed obstacles veto motion.
-- Treat proximity as exploration, not confirmed contact. Preserve the user's choice of grip and explicit self-confirmation.
-- Tracking/camera failure latches a stop until a new search. Stop cancels microphone/captures and invalidates late results.
-- Hold verification is one bounded cycle per search: at most 3 observations in 35 seconds. Two identity-positive observations must show the object and at least two common physical fingertips moving together; the thumb is optional. Retain good evidence across a missing observation. Supported objects must rise, not merely slide.
-- Request at most one 4 cm horizontal movement, only after the hand settles and the current scene/reach/view allow it. Capture on observed movement (4-second deadline), not a repeated lift. Missing evidence ends with explicit self-confirmation, New search, or Stop; no automatic restart.
-- Each cycle uses at most 3 SAM + 3 identity calls; a missing SAM observation skips identity. The hold-SAM budget remains 12 per search. No per-frame cloud calls. Historical limits below are not the current hold policy.
-- Report code tests, simulation, compilation, device measurements and blind-user evaluation separately. Keep historical logs; mark superseded procedures explicitly.
+## Current find-and-grab contract (v9.1, with the v9.2 additions, 2026-10-31)
+Nils, after the v8 run: "having the pre set up is a good idea, but the whole process is a piece of shit user experience, and the voice instruction is crumbled." Decisions: keep the safety base, redo the flow and the voice.
+- **Reach:** measured once (long press, index fingertip held out comfortably) and saved across launches, with the hand length (wrist to index tip); re-measure only on request. **Distance never stops guidance** (Nils, 2026-10-31: "I don't care how far the object is, it must guide"); the reach scales thresholds and decides staged waypoints only.
+- **Controls:** one screen. Tap = start listening / stop (finishes a room scan). Double tap = "I have it", always: it runs a check, and if the check is unsure the claim is accepted ("Okay. You have the X."), logged `user_confirmed`. Long press = measure reach. VoiceOver: activate = double tap, magic tap = tap, named actions for the rest.
+- **Voice:** one action per line, about 8 words or fewer. Never name on-screen buttons. No disclaimers in speech ("contact is not confirmed" belongs in docs). Only Stop, obstacles and check results interrupt.
+- **v9.2 (Nils, 2026-10-31, after the below-8/10 list):** touching things on the way is normal for a blind user; time to the object is the core KPI. Obstacles: no stop and no planned detour by default; one Spark look (numbered marks on a photo) names the things in the map, and the line says the name and the side to pass it ("A bottle is ahead. Go around it on your right."). The side is chosen by geometry (the object's side, else away from it, else fewer things), not by the LLM, because it must be instant. Rolling scan: the map is extended about once a second; a cell joins only when seen in two scans in a row, arm and hand removed. A stalled hand (same direction 4 times) and an empty spot (LiDAR, objects ≥ 3 cm thick) start a hold check, which looks at the spot again (supersedes "a stalled hand gets no check" below). Hand gone ~11 s: "I need to see your hand to guide you." and a short spoken conversation with Spark (≤ 3 turns). Hand on the object 20 s without a pick-up: "It's right below your hand."
+- **Nothing latches:** a lost hand says "I can't see your hand." at once, then every 10 s while it stays gone; lost tracking says "Hold still." and resumes; a turned or moved body re-bases the direction frame; an object off to the side asks the user to turn, then guides. Obstacles (v9.1): one map from the lock frame (`ObstacleMap.scene`, shared with the simulator), never a live full frame (it held the user's own arm). A move heading into one: "Stop. Something's in the way.", then a way around (another axis, a sideways shift onto the object, back, or up and over); if none is clear, "Go slowly. Something is on your left." and guide on. Nothing ends a search; 20 s without a pick-up says "Let's try again." and guides again. Never more than 8 s of silence while guiding.
+- **Body scale (v9.1, Nils):** no centimetre threshold is absolute. Arm-sized ones scale by reach / 52 cm, hand-sized ones by hand length / 18 cm, clamped 0.6–1.5 (`BodyScale`). Object and sensor thresholds are not scaled.
+- **Pick-up trigger (v9.1, object-centred):** a hand put down and lifted without touching the object must not count. A check needs a contact candidate first (≥ 2 fingertips within a hand-sized 4 cm of the object), then the hand leaving (reach-scaled 10 cm), rising (reach-scaled 5 cm for 0.2 s) or being lost for 1.5 s. One check per event. A stalled hand gets one "Double tap if you have it." and no check.
+- **Recording (record only):** each check logs `spot_evidence` and saves a 2 s + 2 s burst at 10 Hz (≤ 5 per search, ≤ 30 per launch). They do not change results.
+- **Hold check (back to v7):** the trigger above starts a check at once (Nils, v7: no waiting for a manual check). One photo: 1 SAM + 1 Spark (photo + reference crop), combined by `HoldDecision`. At most 6 automatic checks per search; hold-SAM budget 12. Results: "Got it. You have the X." / "The X is still there." (guide again) / "Not sure. Double tap if you have it."
+- Report unit tests, simulation, compilation, device runs and blind-user evaluation separately.
+
+### Obsolete: reach-control contract (v8, 2026-10-30)
+Superseded by v9 above (sim normal 8/20, ~50 s; latched stops; a 4 cm movement test; 7 on-screen controls). Kept as a record: reach measured after every background; stops latched until a new search; one bounded 3-observation hold cycle per search with a requested 4 cm movement; missing evidence ended in self-confirmation, New search or Stop. See `docs/HUMAN_FACTORS.md` (obsolete).
 
 ## Architecture rules
 - **Cloud = understand and decide.** Muse Spark and SAM 3.1 via Meta Model API (`https://api.meta.ai/v1`, OpenAI-compatible). Never call them per frame.
@@ -45,6 +50,7 @@ When changing guidance, perception, audio, controls, or verification, read `docs
   - Strict hold check: 1 extra SAM call, only when the hand has moved away from the object.
   - Room scan ("scan the room"): ≤ 12 Spark calls at medium effort, once per room.
   - Scan give-up: 1 Spark guess at minimal effort.
+  - v9.2: obstacle names, 1 Spark call (minimal) per search with things near the target; hand help, ≤ 3 Spark calls (minimal) per search, only after the hand has been gone ~11 s.
 
   Worst case, a small object with a full scan is about 37 SAM calls, roughly $0.09.
 - **Correctness first, cost later (Nils, 2026-10-29 after the v5 test, ~$1 spent so far):** limits are raised so the whole flow works end to end; revisit after it does.

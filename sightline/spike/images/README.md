@@ -10,4 +10,4 @@ Requirements:
 
 Avoid faces and personal documents: images are sent to the Meta Model API.
 
-2026-10-30：靜態照片只驗證辨識與分割；兩影格持有確認與人體動作須依 `docs/FIND_TEST.md` 另外驗證。
+2026-10-31: these still photos test recognition and segmentation only; the hold check and hand motion need the device tests in `docs/FIND_TEST.md`.

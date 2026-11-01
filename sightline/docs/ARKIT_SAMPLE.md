@@ -1,6 +1,6 @@
 <!-- labels: testing, reference -->
 
-> 2026-10-30 更新：本文件保留原始實驗／參考紀錄；目前取物行為、成本計數與驗收以 [PRD](PRD.md)、[人因修訂](HUMAN_FACTORS.md) 與 [FIND_TEST](FIND_TEST.md) 為準。歷史通過結果不代表新版本已完成實機或視障使用者驗證。
+> Update 2026-10-31: this document keeps the original experiment and reference record. Current find-and-grab behaviour, call counts and acceptance are in [PRD](PRD.md), [TEST_LOG](TEST_LOG.md) (T10) and [FIND_TEST](FIND_TEST.md). Earlier passes do not mean the current version has been tested on the device or with blind users.
 # S0.1 — Run Apple's ARKit scene-reconstruction sample on the iPhone 15 Pro
 
 Goal: prove the Mac → iPhone toolchain works and LiDAR mesh classification runs. Do **not** copy the sample into this repo; keep it in `~/Developer/apple-samples/`.

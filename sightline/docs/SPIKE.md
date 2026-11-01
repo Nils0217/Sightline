@@ -1,6 +1,6 @@
 <!-- labels: important, testing -->
 
-> 2026-10-30 更新：本文件保留原始實驗／參考紀錄；目前取物行為、成本計數與驗收以 [PRD](PRD.md)、[人因修訂](HUMAN_FACTORS.md) 與 [FIND_TEST](FIND_TEST.md) 為準。歷史通過結果不代表新版本已完成實機或視障使用者驗證。
+> Update 2026-10-31: current find-and-grab behaviour, call counts and acceptance are in [PRD](PRD.md), [TEST_LOG](TEST_LOG.md) (T10) and [FIND_TEST](FIND_TEST.md). Earlier passes do not mean the current version has been tested on the device or with blind users.
 # Spike & validation checklist
 
 Goal: prove the riskiest paths work before building the full app. Record every number in the table at the bottom.
@@ -167,22 +167,34 @@ Findings:
 - [ ] Pre-grab SAM confirm (PRD step 6) — deferred: the reaching hand occludes the object; decide after v1 test.
 - [ ] Action Button / App Intents trigger
 
-## 人因修訂待驗證（2026-10-30）
+## v8 reach-control revision (ChatGPT, 2026-10-30) — obsolete
 
-- [x] 實作舒適距離量測、目標／路點界線與分階段接近。
-- [x] 實作追蹤、相機與障礙停止，以及固定停止／狀態／Check／自行確認控制。
-- [x] 實作兩影格共同移動與語意比對門檻；單影格與 Spark 單獨肯定不成功。
-- [ ] 新版 iPhone／VoiceOver 全流程驗證：依 FIND_TEST。
-- [ ] 新版雲端兩影格確認延遲與實際成本。
-- [ ] 視障者與原有方法的比較、共同設計與疲勞評估。
+Superseded by v9. Done then: reach measurement with target/waypoint gates and a staged approach; tracking, camera and obstacle stops with fixed Stop / Status / Check / self-confirm controls; a two-frame shared-motion hold check (HoldVerification, at most 3 observations and one 4 cm movement). Its own result: 169 tests passed; simulated automatic completion normal and bottle_centered 4/10 each. Never tested on the device.
 
-舊版單元測試與模擬器成功率僅對當時版本成立；目前驗證結果見 TEST_LOG 人因修訂條目。
+## v9 find-and-grab redo (2026-10-31)
 
-## 本輪確認回歸
+- [x] Reach measured once and saved; long press re-measures.
+- [x] Tap / double tap / long press; VoiceOver actions; short spoken lines.
+- [x] Nothing latches: tracking loss holds and resumes, body turns re-base, obstacles stop and resume.
+- [x] Hold check back to v7: any pick-up checks at once, one photo, SAM + Spark, HoldDecision.
 
-- [x] 以 HoldVerification 取代一次失敗就清空證據的固定配對流程。
-- [x] 限三次觀測、一次水平動作與明確待決定出口。
-- [x] 新增漏檢、遮擋、錯物件、獨立移動與逾時反例。
-- [ ] iPhone／VoiceOver／真實身份提示與雲端延遲驗證。
+### v9.1 (2026-10-31, Nils: object-centred trigger, body-scaled thresholds)
 
-本輪最終本機結果：169 項測試／33 個 suite 通過，iOS 原始碼型別檢查通過；四十次合成反例零自動成功。normal 與 bottle_centered 自動完成率各 4/10，其餘明確無法確認，不能宣稱可靠取物。詳見 TEST_LOG「有限次確認修訂」。
+- [x] Pick-up trigger needs a contact candidate first; then leave / rise / lost. Hand down and up away from the object: no check (test).
+- [x] Hand length measured with the reach; arm thresholds scale by reach, hand thresholds by hand length (`BodyScale`).
+- [x] Double tap always "I have it"; an unsure check after it accepts the claim (`user_confirmed`).
+- [x] Record only: `spot_evidence` per check, 2 s + 2 s burst at 10 Hz.
+- [x] Sim fault scenarios no longer count self-confirmation; all four 0/20.
+- [ ] Device run v9.1 (Nils): `docs/FIND_TEST.md`, then T11 in `docs/TEST_LOG.md`; bring back the burst folders.
+- [ ] Set the leave / rise / near numbers from the bursts instead of guesses.
+- [ ] Decide whether the strict thumb rule (`GraspAssessment.holds()`, Nils's "held" definition) gates success; unused so far.
+- [x] Obstacle detour (v9.1; superseded by v9.2 naming).
+- [ ] Blind-user evaluation against their own way of finding things.
+
+### v9.2 (2026-10-31, Nils's review of the below-8/10 list)
+
+- [x] Obstacles named by Spark, side to pass said; no stop or detour by default (sim obstacle 33.7 s vs 55.6 s).
+- [x] Rolling scan (two scans in a row), sim `late_obstacle` 20/20.
+- [x] Stall and empty-spot checks; "It's right below your hand."; hand-help conversation.
+- [x] Device run T11 (`logs/V9.1.3`): mug search 34.4 s is the reference success.
+- [ ] T11 issues: wrong identity not caught (utensil holder locked as "mug" at SAM 0.84, above the 0.75 verify threshold); no obstacle map without a support height (cluttered dresser); the target's own edge named as an obstacle (book); rolling scan grows the map by hundreds of points; "Not sure" ends with no double tap.

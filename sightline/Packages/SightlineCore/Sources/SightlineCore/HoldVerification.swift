@@ -1,6 +1,7 @@
-// labels: production, needs-review, important
-// Bounded evidence collection shared by the app and simulator. Identity is separate from
-// hand/object motion. Dropouts retain recent evidence; uncertain outcomes never restart themselves.
+// labels: obsolete, needs-review
+// OBSOLETE since v9 (2026-10-31): the app and simulator no longer use this multi-observation check
+// with a requested 4 cm movement (v8: normal sim run 8/20, ~50 s). Replaced by HoldCheck.swift.
+// Kept compiling for HoldVerificationTests and as a record; do not build on it.
 import simd
 
 public struct HandTrace: Sendable {
@@ -30,15 +31,6 @@ public struct HandTrace: Sendable {
             for (joint, p) in sample.joints where joints[joint] == nil { joints[joint] = p }
         }
         return joints.isEmpty ? nil : HandKeypoints(joints: joints)
-    }
-}
-
-public enum HoldContact {
-    /// Proximity candidate, not grip proof. Two visible tips suffice; a thumb is not mandatory.
-    public static func near(hand: HandKeypoints?, points: [SIMD3<Float>], centre: SIMD3<Float>) -> Bool {
-        guard let hand else { return false }
-        let surface = points.isEmpty ? [centre] : points
-        return hand.tips.values.filter { tip in surface.contains { simd_distance($0, tip) <= 0.04 } }.count >= 2
     }
 }
 

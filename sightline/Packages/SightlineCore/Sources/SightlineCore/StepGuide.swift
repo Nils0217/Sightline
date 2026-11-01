@@ -36,6 +36,10 @@ public struct StepGuide: Sendable {
     public var stalledAfter: Double = 1.5
 
     public private(set) var state = State.ready
+    /// Remaining offset at which the current move is done. A small final move ("A little left.", all
+    /// axes under `startTolerance`) runs to 1 cm: stopping it at `axisTolerance` stopped it at once and
+    /// "A little left." / "Stop." repeated seven times (sim target_bias, 2026-10-31).
+    private var stopAt: Float = 0.03
     private var lastSeen: Double?
     /// Recent (time, offset) samples for the speed estimate.
     private var history: [(Double, BodyOffset)] = []
@@ -60,7 +64,7 @@ public struct StepGuide: Sendable {
 
         if offset.length <= grabRadius {
             state = .grabbing
-            return GuidanceCue(kind: .grab, phrase: "Stop. The object is nearby. Explore slowly with your fingertips.", key: "grab")
+            return GuidanceCue(kind: .grab, phrase: "Stop. It's at your fingers.", key: "grab")
         }
 
         switch state {
@@ -69,7 +73,7 @@ public struct StepGuide: Sendable {
         case .moving(let axis, let sign, var issuedAt):
             // The "stopped short" clock starts when the instruction has been heard, not queued.
             if !canInstruct { issuedAt = time; state = .moving(axis, sign: sign, issuedAt: time) }
-            if Self.value(offset, axis) * sign <= axisTolerance {
+            if Self.value(offset, axis) * sign <= stopAt {
                 state = .ready
                 stillSince = nil  // wait for the hand to settle after "Stop."
                 return GuidanceCue(kind: .stop, phrase: "Stop.", key: "stop")
@@ -96,26 +100,50 @@ public struct StepGuide: Sendable {
         lastInstruction = nil
     }
 
+    /// The phrase for a move, without changing state ("Right, 20 centimetres." / "A little right.").
+    public static func phrase(axis: Axis, value v: Float) -> String {
+        let word: String
+        switch (axis, v >= 0) {
+        case (.right, true): word = "right"
+        case (.right, false): word = "left"
+        case (.up, true): word = "up"
+        case (.up, false): word = "down"
+        case (.forward, true): word = "forward"
+        case (.forward, false): word = "back"
+        }
+        let cm = Int((abs(v) * 100).rounded())
+        return cm < 6 ? "A little \(word)." : "\(word.prefix(1).uppercased() + word.dropFirst()), \(GuidanceController.rounded(cm)) centimetres."
+    }
+
+    /// A move the caller has just said itself (silence watchdog).
+    public mutating func resume(axis: Axis, sign: Float, time: Double, value: Float) {
+        lastInstruction = (axis, sign)
+        stopAt = abs(value) < startTolerance ? min(axisTolerance, 0.01) : axisTolerance
+        state = .moving(axis, sign: sign, issuedAt: time)
+    }
+
     private mutating func instruct(_ o: BodyOffset, time: Double) -> GuidanceCue {
         let (axis, v) = Self.dominantAxis(o, tolerance: startTolerance)
         let sign: Float = v >= 0 ? 1 : -1
         let repeated = lastInstruction.map { $0.axis == axis && $0.sign == sign } ?? false
         lastInstruction = (axis, sign)
+        stopAt = abs(v) < startTolerance ? min(axisTolerance, 0.01) : axisTolerance
         state = .moving(axis, sign: sign, issuedAt: time)
         let cm = Int((abs(v) * 100).rounded())
+        // v9 (Nils, 2026-10-31: "the voice instruction is crumbled"): one short phrase per cue.
         let word: String
         switch (axis, v >= 0) {
-        case (.right, true): word = "Move your hand right"
-        case (.right, false): word = "Move your hand left"
-        case (.up, true): word = "Move your hand up"
-        case (.up, false): word = "Move your hand down"
-        case (.forward, true): word = "Move your hand forward"
-        case (.forward, false): word = "Move your hand back"
+        case (.right, true): word = "right"
+        case (.right, false): word = "left"
+        case (.up, true): word = "up"
+        case (.up, false): word = "down"
+        case (.forward, true): word = "forward"
+        case (.forward, false): word = "back"
         }
         let phrase: String
-        if cm < 6 { phrase = "\(word), a little." }
-        else if repeated { phrase = "\(word), slowly." }
-        else { phrase = "\(word), about \(GuidanceController.rounded(cm)) centimetres." }
+        if cm < 6 { phrase = "A little \(word)." }
+        else if repeated { phrase = "Keep going \(word)." }
+        else { phrase = "\(word.prefix(1).uppercased() + word.dropFirst()), \(GuidanceController.rounded(cm)) centimetres." }
         return GuidanceCue(kind: .move, phrase: phrase, key: "\(word)-\(GuidanceController.rounded(cm))", repeated: repeated)
     }
 
@@ -166,6 +194,8 @@ public struct StepGuide: Sendable {
     }
 }
 
+/// OBSOLETE since v9.1 (2026-10-31): no longer used by GuidanceSession (a single depth pixel cannot tell a
+/// lift from a push; SpotEvidence now records the whole visible footprint). Kept for its tests.
 /// Local pick-up check: once the hand has been near the target, the LiDAR depth where the object
 /// sat jumps *farther* (the table or floor behind it) when the object is lifted away.
 public struct PickupDetector: Sendable {
@@ -206,6 +236,8 @@ public struct PickupDetector: Sendable {
 ///   lift  : then rises `rise` above its lowest point for `riseHold` -> "lift"
 ///   lost  : or the hand disappears for `lostAfter` while armed (fingers around an object hide it)
 /// -> "hand_lost_low". Disarmed after firing until the palm is low again.
+/// OBSOLETE since v9.1 (2026-10-31): not object-centred. A hand that rested near the table and came
+/// back up triggered a check without ever reaching the object (Nils). Kept for its tests.
 public struct LiftDetector: Sendable {
     public var lowAbove: Float = 0.09  // palm over a gripped phone: 5–8 cm above the table
     public var dwell: Double = 0.4

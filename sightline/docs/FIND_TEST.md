@@ -1,80 +1,59 @@
 <!-- labels: important, testing, needs-review -->
-# 人因修訂版：實機與使用者驗證
+# Find test (v9.2, 2026-10-31)
 
-更新：2026-10-30。本文件取代舊版 v6 操作步驟。歷史結果仍在 TEST_LOG / SPIKE；目前尚未進行此版本的實機或視障使用者測試。
+Device test for the v9 find-and-grab redo with the v9.1 object-centred trigger and body-scaled thresholds. Results go in [TEST_LOG](TEST_LOG.md) as T11. The v8 steps (ChatGPT, in Chinese) are in the `chatgpt-reach` branch; they no longer apply.
 
-## 準備與操作
+## Data and log files (read first)
 
-使用有 LiDAR 的相容 iPhone，固定胸前。在清楚、穩定且有人可協助觀察的桌面情境驗證。先以無尖銳或高溫風險的日常測試物件測試。這是待驗證原型，不測試行走導航。
+- **find_log_<launch>.csv**: one file per app launch, rewritten after every event, so it grows through the run. Export once at the end.
+- **Diagnostics folder**: one photo + depth + hand record per SAM call, hold check and "Stop. The … is at your fingers." moment. It grows by a few hundred KB per search.
+- **Burst folders** (v9.1, `NN_burst_<reason>/` inside the diagnostics folder): one per hold check, 2 s before + 2 s after at 10 Hz (depth, confidence, poses, hand joints, small photos), about 2 MB each. At most 5 per search and 30 per launch, so at most ~60 MB per launch. These set the real thresholds; please bring them back.
+- **api_calls.csv**: every Meta Model API call (latency, estimated cost). It accumulates across launches.
+- **inventory.json**: the room map from "scan the room"; it is overwritten by the next room scan.
+- The saved reach and hand length (two numbers) live in the app's settings and survive relaunches; long press replaces both.
+- Everything contains home photos: copy it to `logs/v9/` (gitignored) and never commit it.
 
-1. 開啟 App 即聽取設定說明，預設右手；VoiceOver 可選左右手，未開 VoiceOver 時可在設定大區域左右滑切換，切換後語音回報。
-2. 點設定大區域開始量測；VoiceOver 可用雙指點兩下。三秒內將食指放在不需前傾或伸展的舒適位置，保持穩定至語音回報。只展示一隻手。再次啟動同一控制停止量測。
-3. 量測成功自動離開設定，無需找完成按鈕。閒置時點主要區域或 VoiceOver 雙指點兩下，說出要找的物件。設定隨時可長按退出或用 VoiceOver 退出手勢；未量測前引導仍不可用，再點主要區域重開設定。
-4. 引導期間保持身體不動。接近後以自己的方式觸覺探索；系統沒有確認實際接觸。
-5. 拿起後選 Check。若自然移動仍不足且手已穩定，最多要求一次四公分水平移動。依本機位移觸發下一影格；沒有動作四秒後只補看一次，不繼續向上抬。
-6. 三次觀測／三十五秒仍不確定時，Check 停用；選 New search、Stop，或在自己確知物件時按 I confirm I have it。
-7. 任務期間主要區域、固定 Stop、長按與 VoiceOver Stop 動作都停止；Status 隨時報狀態。
-8. 房間掃描使用 Finish scan and save 儲存；Stop 放棄本次掃描。
-9. 重新佩戴、手機移動或 App 離開前景後重新量測。背景返回會先呈現設定。
+## Setup
 
-## 必跑案例
+iPhone 15 Pro secured on the chest, indoors, good light, a table within reach. Use safe everyday objects (book, phone, cup, key). Someone watching is useful.
 
-| 案例 | 期望結果 |
-|---|---|
-| 食指不可見、手或手機不穩 | 不產生成功量測；語音提示結束後量測十五秒內回報失敗；完全無影格時牆鐘四十五秒內回報逾時，可重新量測 |
-| 目標在界線之外／身後 | 無移動指令，說明伸手範圍問題 |
-| 目標在相機側邊二十度之外 | 先保持手放下，明說轉動身體、重新搜尋；不直接側伸或沿舊基準繼續 |
-| 目標可及但抬高路點越界 | 停止，不為避障而要求超界動作 |
-| 桌面手、前方物件 | 先抬高，再橫移，再下降；不持續要求往桌面下方移動 |
-| 書、手機、瓶子、杯子 | 接近近側，提供適合的觸覺探索描述；不聲稱已辨識杯柄或已接觸 |
-| 指尖路徑出現障礙 | 立即插播 Stop，不再接原本方向指令，重新搜尋才可繼續 |
-| 只有手腕／前臂路徑被擋 | 同樣中止；記錄近似模型的漏檢和誤停 |
-| 動態加入可見障礙 | 當前影格點雲否決動作；記錄從出現到停手語音的延遲 |
-| 食指間歇遮擋、其他指尖仍可見 | 短暫缺失不反覆換點或清除靜止計時；持續缺失才切換可見實際指尖 |
-| 遮住相機／手消失 | 無持續方向指令；說明不確定原因並提供 Check 或恢復方式 |
-| tracking 失效、相機移動、影格停止 | 停手、靜音；恢復後不自動使用舊路徑 |
-| 手靠近但未接觸／物件懸在掌心上方 | 不自動報已拿到；近距離只觸發探索 |
-| 參考裁圖缺失或候選來自較早影格 | 缺少參考時保留無法確認；較早候選只使用自己的來源影格，不與最新照片錯配 |
-| 拿錯旁邊物件或同類物件 | 不能因原位變空或模型單次肯定而成功；記錄身份誤判 |
-| 最多三次觀測中，兩次共同位移與身份肯定 | 才允許自動確認；綠點更新，原位置記憶移除 |
-| 物件固定、只有手移動 | 無法確認；不自動成功 |
-| 網路失敗、SAM 預算耗盡、模型分歧、35 秒超時 | 保留無法確認；不降級為 Spark 單獨成功，不恢復舊位置引導 |
-| Check 否定／不確定後手仍持物 | 不再自動檢查或要求移動，Check 停用；提供自行確認、New search 與 Stop |
-| 使用者自行確認 | 日誌為 user_confirmed；不冒充模型驗證 |
-| 聆聽／搜尋／掃描／引導／確認期間 Stop | 即時回饋，麥克風與舊結果失效；延遲結果不得重啟任務 |
-| 背景、返回、設定重測 | 停止任務，重新量測，舊結果不得生效 |
-| VoiceOver 開／關 | 可完成設定、開始、停止、狀態、Check、自行確認與掃描儲存 |
+## Controls
 
-## 記錄與評估
+| Gesture | Idle | During a task |
+|---|---|---|
+| Tap | Listen ("find my book", "scan the room") | Stop (room scan: finish and save) |
+| Double tap | Listen | "I have it", always: a check; if the check is unsure, your word is taken ("Okay. You have the X.") |
+| Long press | Measure reach | Measure reach (ends the task) |
 
-Export 取得每次啟動的 find_log CSV、diagnostics 影像／深度與 API 呼叫日誌。資料含居家照片，保留在 gitignored logs，不提交。
+VoiceOver on: double tap = "I have it", two-finger double tap = start / stop; swipe up or down for Stop, Status, I have it, Measure reach.
 
-新紀錄包括 safety_pause、stop、user_confirmed、hold_check_result 的 motion true/false，以及附帶 session/check ID 的 hold_check／hold_motion 影格。確認循環最多三次 SAM 與三次身份比對；SAM 每搜尋十二次檢查預算，每搜尋最多一次確認循環；手動 Check 同樣受總預算約束。
+## Steps
 
-每次測試記錄版本、手機／iOS、佩戴方式、光線、物件、距離、成功或停止原因、碰撞、誤報、完成時間、外援和疲勞。首次回應與首次有效動作引導分開計時；不把「正在尋找」當作三秒內完成引導。
+1. **First launch.** Expect one sentence: "Welcome. Hold your hand out comfortably, then press and hold the screen." Hold your index finger out without stretching, long press. Expect "Hold your hand out comfortably. Hold still." then "Reach N centimetres. Tap and say what to find." Quit and relaunch: expect "Ready. Tap and say what to find." (no new measurement).
+2. **Book ahead.** Tap, "find my book". Expect "Looking for the book.", "Found the book. Ahead, …, N centimetres.", "Hold your hand out.", "I see your hand.", then short directions ("Right, 20 centimetres.", "A little down.", "Stop."), then "Stop. The book is at your fingers."
+3. **Pick it up.** Lift the book. Expect "Checking." within about a second, then "Got it. You have the book."
+4. **Lift something else.** Search the book again, but lift a different object near it. Expect "The book is still there." and directions again.
+5. **Not sure.** If you hear "Not sure. Double tap if you have it.", double tap while holding it: expect "Okay. You have the book." (log `user_confirmed`).
+5a. **Hand without touching (v9.1).** Search the book; when guided, put your hand on the table about 15 cm from the book, then lift it away, twice. Expect no "Checking." Then touch the book and lift your empty hand away: one "Checking." is allowed (contact candidate), and it must end in "The book is still there."
+5b. **Tall object straight up (v9.1).** Search a bottle, grip it, lift it straight up without moving sideways. Expect "Checking." within about a second (log reason `near_then_rose`).
+5c. **Holding still (v9.2).** Grip the object and do not move while directions repeat. After the same direction 4 times, expect one "Checking." (reason `stalled`); no repeated checks after that.
+6. **Off to the side.** Object about 40° to one side: expect "Turn a little to your right, to face it.", turn, then "Good. Hold your hand out." and directions. Nothing should say "start a new search".
+7. **Body moves.** During directions, shift or turn your body a little. Directions continue (from your new facing); no stop.
+8. **No false obstacle (v9.1, device failure).** Nothing between hand and object, your other hand and sleeve in view: expect no "Something's in the way" at all.
+8a. **Obstacle (v9.2).** A bottle between your hand and the object, placed before you search: expect one line naming it and the side to pass it ("A bottle is ahead. Go around it on your right." or "Careful. A bottle is on your left."), then directions straight on. Touching it is fine; there is no stop and no planned detour. Log `obstacle_names` shows what Spark called each thing.
+8b. **Put down later (rolling scan).** Start a search, then put a cup between your hand and the object: within about 2 s it should be in the map (log `rolling_scan obstacles A -> B`) and named as "Something" (it was not in the naming photo).
+8c. **Holding it already.** Pick the object up yourself before guidance reaches it and keep your hand still: after a few repeats of the same direction, expect "Checking." and "Got it." (check reason `stalled`). For a tall object (bottle, box), just lifting it off its spot should start a check by itself (reason `spot_empty`).
+8d. **Hand gone.** Put your hand down out of view for 15 s: "I can't see your hand.", then "I need to see your hand to guide you." and a listening tone. Say something ("where should my hand be?"): expect a short spoken answer. Silence ends the talk; guidance continues when the hand is back.
+8e. **Hand on it, not picking up.** Rest your hand on top of the object without lifting for 20 s: expect "It's right below your hand." (every 10 s).
+9. **Far object.** Object about 1 m away: directions still come (no "out of reach"); lean or step as you need.
+10. **Stop.** Tap in each phase (listening, looking, guiding, checking): "Stopped." each time, nothing continues afterwards.
+11. **Room scan.** "scan the room", turn slowly, tap when done: "Saving the room." then "Room saved. …"
+12. Export (top right) and copy to `logs/v9/`.
 
-先完成實機與 VoiceOver 驗證，再與視障參與者共同調整流程。蒙眼測試只協助找流程問題，不能代替視障者的技能、習慣或使用成效。比較基準是參與者自己的原有取物方式，而不是只與另一個 AI 模型相比。
+## Log events to look at (v9.1)
 
-## 已執行的本機驗證
+`hold_check` carries the reason (`near_then_left`, `left_object`, `near_then_rose`, `near_then_lost`, `double_tap`, v9.2: `stalled`, `spot_empty`); v9.2 adds `obstacle_names`, `rolling_scan`, `hand_help_heard`, `hand_help_answer`; `spot_evidence` gives vacated / occupied / occluded / invalid counts at the object's old spot (record only); `recorded_burst` names each burst folder; `user_confirmed` marks a double tap the check could not settle. `reach_measure` logs the measured reach and hand length (also in each burst's `frames.json` as `reach_m`, `hand_m`).
 
-具體日期與結果更新於 TEST_LOG 的「人因修訂」條目。Mac 的單元測試、合成模擬器及 iOS 編譯分開記錄；目前真人案例仍全部待執行。
+## What to note per search
 
-## 本輪新增驗收
-
-1. 重跑 normal seed 3 與 bottle_centered seed 1，紀錄每次身份、近手、離位、共同位移與結束原因；最多三次影像、一次水平動作，不得重現四十公分累積抬高。
-2. 單張 SAM 漏檢後，仍可利用前後有效觀測確認；缺拇指但其他兩個共同指尖可見時仍可評估。
-3. 指定關節掉點少於一百五十毫秒可使用最近資料；更舊或只有一個共同指尖不能確認。
-4. 拿錯、只有手移動、只有物件移動、沿桌面推動、身份否定或只有一次身份肯定，都不能自動成功。
-5. 沒有可靠空間、視野或伸手餘裕，不要求移動；已要求的動作超過七公分、越界或失去手時，停手並結束確認。
-6. 結束後持續展示／移動手、重按 Check 或舊雲端結果返回，都不能自動重啟；自行確認後狀態須是已完成，New search 才可開新循環。
-
-這些仍需 iPhone、VoiceOver 與真實 API 驗證，不能以合成結果代替。
-
-補充必測：提示播放中、已送出確認影像但仍等待雲端時，加入障礙／使深度失效／移出視野，均須立即停；只剩一共同指尖、反向移動、超過七公分、寬物件只有邊緣碰撞也須否決。手先移開再回原位不能被視為穩定；第二張漏檢後，路徑排除使用保留 anchor 的表面。
-
-## 2026-10-31 設定頁卡住回歸驗收（實機待測）
-
-- 成功量測（例如 27 公分）自動回主畫面，不需找完成控制。
-- 未量測、量測中、失敗後均可長按或 VoiceOver 退出手勢離開；取消後不得因舊量測資料重開。
-- VoiceOver 開啟時設定後方的主畫面控制不可取得焦點。雙指點兩下可開始／停止量測，左右手選擇有語音回饋。
-- 設定說明自動播放；結束、逾時與重試流程須蒙眼核對，不把 Swift 型別檢查當作手勢／音訊驗證。
+Object, distance, lighting, time to the first direction, time to "Got it", lines that were too long or cut off, any wrong "Got it", stops that should not have happened, and anything you had to ask a helper for. Blindfold runs find flow problems only; they do not stand in for blind users.

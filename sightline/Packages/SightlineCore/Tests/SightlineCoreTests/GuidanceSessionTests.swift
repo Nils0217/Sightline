@@ -23,9 +23,8 @@ import simd
 
     @Test func openingSaysWhereAndAsksForHand() {
         let s = GuidanceSession(targetName: "phone", target: [0.3, 0, -0.5], cameraTransform: Self.camera, time: 0)
-        // 31° to the right: turn to face it before reaching (2026-10-29).
-        #expect(s.opening.map(\.text) == ["Found the phone. It's to your right, about 60 centimetres.",
-                                          "Keep your body still. Show only the hand you will use, comfortably in front of the camera."])
+        // v9: short lines. 31° to the right: with a reach profile (the app), turn first (edgeOfViewAsksToTurnThenGuides).
+        #expect(s.opening.map(\.text) == ["Found the phone. To your right, 60 centimetres.", "Hold your hand out."])
     }
 
     @Test func noTurnWhenAhead() {
@@ -58,6 +57,6 @@ import simd
                               targetDepthDelta: 0, speaking: false).lines.map(\.text)
         }
         #expect(lines.contains("I see your hand."))
-        #expect(lines.contains { $0.hasPrefix("Move your hand right, about") })
+        #expect(lines.contains { $0.hasPrefix("Right, ") })
     }
 }

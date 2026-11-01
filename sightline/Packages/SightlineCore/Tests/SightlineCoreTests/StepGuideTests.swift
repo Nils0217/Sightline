@@ -18,7 +18,7 @@ import Testing
         var g = StepGuide()
         let o = BodyOffset(right: 0.2, up: 0, forward: 0.1)
         #expect(hold(&g, o, from: 0, to: 0.5).isEmpty)
-        #expect(hold(&g, o, from: 0.5, to: 1.0) == ["Move your hand right, about 20 centimetres."])
+        #expect(hold(&g, o, from: 0.5, to: 1.0) == ["Right, 20 centimetres."])
     }
 
     @Test func silentWhileMovingThenStop() {
@@ -40,7 +40,7 @@ import Testing
         _ = hold(&g, BodyOffset(right: 0.2, up: 0, forward: 0.15), from: 0, to: 1)
         _ = g.update(time: 1.0, offset: BodyOffset(right: 0.02, up: 0, forward: 0.15))  // jump -> Stop
         let cues = hold(&g, BodyOffset(right: 0.02, up: 0, forward: 0.15), from: 1.05, to: 2.0)
-        #expect(cues == ["Move your hand forward, about 15 centimetres."])
+        #expect(cues == ["Forward, 15 centimetres."])
     }
 
     @Test func stalledHandIsReinstructed() {
@@ -48,7 +48,7 @@ import Testing
         _ = hold(&g, BodyOffset(right: 0.3, up: 0, forward: 0), from: 0, to: 1)
         let cues = hold(&g, BodyOffset(right: 0.18, up: 0, forward: 0), from: 1, to: 3)
         // Same direction again: no new number, just keep going (2026-10-28 recording).
-        #expect(cues == ["Move your hand right, slowly."])
+        #expect(cues == ["Keep going right."])
     }
 
     @Test func grabWhenClose() {

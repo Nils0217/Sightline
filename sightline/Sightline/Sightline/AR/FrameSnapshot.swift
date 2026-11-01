@@ -28,6 +28,16 @@ nonisolated struct FrameSnapshot: Sendable {
 
     static let tiledLongEdge: CGFloat = 930
 
+    /// A small portrait JPEG of the frame (burst recordings, 2026-10-31); nil if encoding fails.
+    static func smallJPEG(_ frame: ARFrame, longEdge: CGFloat) -> Data? {
+        var image = CIImage(cvPixelBuffer: frame.capturedImage).oriented(.right)
+        image = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
+        let scale = longEdge / max(image.extent.width, image.extent.height)
+        image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        return context.jpegRepresentation(of: image, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+            options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.6])
+    }
+
     static func make(from frame: ARFrame, tracking: String, longEdge: CGFloat = longEdge) throws(Failure) -> FrameSnapshot {
         guard let depthData = frame.sceneDepth, let depth = DepthImageReader.read(depthData) else { throw .noDepth }
         // Portrait upright = raw rotated 90° CW (`.right`), same as the Vision/G1 pipeline.
