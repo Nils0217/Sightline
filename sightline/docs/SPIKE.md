@@ -197,4 +197,7 @@ Superseded by v9. Done then: reach measurement with target/waypoint gates and a 
 - [x] Rolling scan (two scans in a row), sim `late_obstacle` 20/20.
 - [x] Stall and empty-spot checks; "It's right below your hand."; hand-help conversation.
 - [x] Device run T11 (`logs/V9.1.3`): mug search 34.4 s is the reference success.
+- [x] v9.2 follow-up: verify every lock (agent too), rejected fallback, look-around with hazards, which-one talk, no-support map, hand capsules, 6 s waits, Not-sure reminder.
+- [ ] Live Spark verify on the T11 utensil-holder photo (needs the key in `sightline/.env`).
+- [ ] Not-sure flow and controls (double tap vs tap, voice, Action Button): decide with Nils.
 - [ ] T11 issues: wrong identity not caught (utensil holder locked as "mug" at SAM 0.84, above the 0.75 verify threshold); no obstacle map without a support height (cluttered dresser); the target's own edge named as an obstacle (book); rolling scan grows the map by hundreds of points; "Not sure" ends with no double tap.

@@ -88,6 +88,10 @@ final class FindModel {
     @ObservationIgnored private var lastJPEG: Data?
     /// The hand-help conversation is running (`startHandHelp`).
     @ObservationIgnored private var handHelpRunning = false
+    /// Locks Spark said were not the object, this search.
+    @ObservationIgnored private var rejected: [Candidate] = []
+    /// "Which one?" was asked this search (a re-lock must not ask again about the first one).
+    @ObservationIgnored private var whichAsked = false
 
     /// Comfortable reach (camera to index fingertip), measured once and saved across launches.
     private(set) var reachDistance: Float? = FindModel.savedReach
@@ -480,6 +484,8 @@ final class FindModel {
         candidates = []
         notFound = []
         agentFinds = 0
+        rejected = []
+        whichAsked = false
         samCalls = 0
         holdSAMCalls = 0
         scanCalls = 0
@@ -544,9 +550,11 @@ final class FindModel {
         var sourceJPEG: Data
     }
 
-    /// Below this SAM confidence, Spark checks the crop before we trust it (the first device test
-    /// locked a power bank for "phone" in a room with no phone).
+    /// OBSOLETE since v9.2: Spark now checks every single lock (T11: a utensil holder locked as "mug" at
+    /// SAM 0.84 was never checked and ended in "Got it. You have the mug."). Kept for the record.
     static let verifyBelow: Float = 0.75
+    /// Spark said "not a <noun>" this many times in a search: stop instead of scanning again.
+    static let maxRejected = 3
 
     /// The current frame as a snapshot (retries while depth is missing).
     private func snapshot(longEdge: CGFloat = FrameSnapshot.longEdge) async -> FrameSnapshot? {
@@ -692,15 +700,30 @@ final class FindModel {
             await runAgent(prompt: "The user said: \"\(lastHeard)\". SAM found several \(noun) candidates "
                            + "(call get_state; the photo is what the chest camera sees). Select the one they mean, or ask them.",
                            jpeg: lastJPEG, effort: .medium)
-        } else if list[0].info.confidence < Self.verifyBelow {
-            speaker.say("Checking.")
-            let ok = await verify(noun: noun, candidate: list[0])
-            guard id == sessionID, phase == .locating else { return }
-            log("verify", "c \(list[0].info.confidence) -> \(ok.map { $0 ? "yes" : "no" } ?? "error")")
-            if ok == true { select(list[0]) }
-            else { startScan(noun) }
         } else {
-            select(list[0])
+            // Every lock is checked by Spark (v9.2, Nils after T11). Things it already rejected are skipped,
+            // so the scan cannot lock the same wrong thing again and again.
+            guard let first = list.first(where: { c in !rejected.contains { simd_distance($0.world, c.world) < 0.10 } }) else {
+                log("verify", "only rejected candidates")
+                startScan(noun)
+                return
+            }
+            let ok = await verify(noun: noun, candidate: first)
+            guard id == sessionID, phase == .locating else { return }
+            log("verify", "c \(first.info.confidence) -> \(ok.map { $0 ? "yes" : "no" } ?? "error")")
+            switch ok {
+            case false?:
+                rejected.append(first)
+                if rejected.count >= Self.maxRejected {
+                    // Spark can be wrong too (Muse review): not "it isn't here", but the likeliest one, said as unsure.
+                    selectBestRejected(noun)
+                } else {
+                    startScan(noun)
+                }
+            default:
+                // Yes, or Spark could not answer (network): SAM's lock stands; no answer must not block a search.
+                select(first)
+            }
         }
     }
 
@@ -765,6 +788,11 @@ final class FindModel {
             } else if let p = lastSeen[noun] {
                 text = Self.earlierLine(p, cameraTransform: f.cameraTransform) + " " + text
             }
+            if !rejected.isEmpty {
+                // Nothing else found: Spark's "no" may have been wrong; go to the likeliest one, said as unsure.
+                selectBestRejected(noun)
+                return
+            }
             finish(spoken: text, event: "scan_give_up")
             suggestAfterGiveUp(noun)
         case .scan:
@@ -786,6 +814,16 @@ final class FindModel {
                 }
             }
         }
+    }
+
+    /// Spark rejected every lock (or the scan found nothing else): guide to the most confident rejected one and
+    /// say so; the user decides by touch.
+    private func selectBestRejected(_ noun: String) {
+        guard let best = rejected.max(by: { $0.info.confidence < $1.info.confidence }) else { return }
+        log("verify", "fallback to rejected c \(best.info.confidence)")
+        scan = nil
+        phase = .locating
+        select(best, intro: "I'm not sure this is the \(noun).")
     }
 
     /// After giving up: one Spark (minimal) guess from a wide photo, spoken if nothing else started.
@@ -863,57 +901,193 @@ final class FindModel {
         guide = session
         processor.scale = bodyScale
         guidePhase = session.phase.rawValue
-        nameObstacles(session.obstacleClusters)
+        lookAround(session.obstacleClusters)
         if let intro { say(SpokenLine(text: intro, interrupt: true)) }
         for (i, line) in session.opening.enumerated() {
             say(SpokenLine(text: line.text, interrupt: line.interrupt && i == 0 && intro == nil))
         }
     }
 
-    /// One Spark look names the things in the lock map (numbered marks on the current photo). Guidance does
-    /// not wait for it: until the answer comes, a thing is "Something".
-    private func nameObstacles(_ clusters: [ObstacleMap.Cluster]) {
+    /// One Spark look at the photo around the target (v9.2): names the things in the map (numbered marks),
+    /// says which are dangerous, finds dangerous things too low for the map (a knife lying flat), and which marks
+    /// look like the target itself. Always made, even with nothing in the map (Nils: safety is a KPI; dangerous
+    /// things must go through the LLM); tried twice. Guidance does not wait for it.
+    private func lookAround(_ clusters: [ObstacleMap.Cluster]) {
         let marks = Array(clusters.prefix(6))
-        guard !marks.isEmpty else { return }
         let id = sessionID
+        let noun = targetName ?? "object"
         Task {
             guard let s = await snapshot() else { return }
-            let size = SIMD2(Float(s.imageSize.x), Float(s.imageSize.y))
-            let pixels: [CGPoint?] = marks.map { c in
-                let mid = SIMD3(c.centre.x, (c.centre.y + c.top) / 2, c.centre.z)
-                let cam = DepthProjector.camera(fromWorld: mid, cameraTransform: s.cameraTransform)
-                guard let raw = DepthProjector.project(cameraPoint: cam, intrinsics: s.intrinsics) else { return nil }
-                let p = MaskTarget.portraitPixel(fromRawPixel: raw, rawSize: s.intrinsics.imageSize, imageSize: size)
-                guard p.x >= 0, p.y >= 0, p.x < size.x, p.y < size.y else { return nil }
-                return CGPoint(x: CGFloat(p.x), y: CGFloat(p.y))
+            let pixels: [CGPoint?] = marks.map { c in Self.photoPoint(SIMD3(c.centre.x, (c.centre.y + c.top) / 2, c.centre.z), s) }
+            let box = guide?.object.flatMap { Self.photoBox($0.points, s) }
+            guard let marked = Self.drawMarks(s.jpeg, at: pixels, labels: marks.indices.map { "\($0 + 1)" }, box: box) else { return }
+            var look: MuseAgent.LookAround?
+            for attempt in 0..<2 where look == nil {
+                look = try? await MuseAgent.lookAround(jpeg: marked, count: marks.count, noun: noun, label: "look_\(id)_\(attempt)")
             }
-            guard pixels.contains(where: { $0 != nil }), let marked = Self.drawMarks(s.jpeg, at: pixels) else { return }
-            let names = (try? await MuseAgent.nameMarks(jpeg: marked, count: marks.count, label: "obstacles_\(id)")) ?? [:]
             guard id == sessionID, guide != nil else { return }
-            log("obstacle_names", marks.indices.map { i in
-                String(format: "%d %@ %.0f cm tall", i + 1, names[i + 1] ?? "?", (marks[i].top - (guide?.object?.supportHeight ?? marks[i].top)) * 100)
-            }.joined(separator: "; "))
-            guide?.nameObstacles(marks.indices.compactMap { i in
-                guard pixels[i] != nil, let name = names[i + 1] else { return nil }
-                return (centre: marks[i].centre, name: name)
-            })
+            guard let look else {
+                log("look_around", "failed")
+                say(SpokenLine(text: "I couldn't check for danger. Go slowly.", interrupt: false))
+                return
+            }
+            let named = marks.indices.compactMap { i -> (centre: SIMD3<Float>, name: String)? in
+                guard pixels[i] != nil, let name = look.names[i + 1] else { return nil }
+                return (marks[i].centre, name)
+            }
+            guide?.nameObstacles(named, dangerous: Set(look.dangerous.compactMap { look.names[$0] }))
+            var hazards: [String] = []
+            for h in look.hazards {
+                guard let p = Self.worldPoint(photoX: h.x, photoY: h.y, s), let target,
+                      simd_distance(SIMD2(p.x, p.z), SIMD2(target.x, target.z)) < 0.6 else { continue }
+                guide?.addHazard(at: p, name: h.name)
+                hazards.append(String(format: "%@ at %.2f,%.2f,%.2f", h.name, p.x, p.y, p.z))
+            }
+            log("look_around", marks.indices.map { i in
+                String(format: "%d %@%@ %.0f cm tall", i + 1, look.names[i + 1] ?? "?", look.dangerous.contains(i + 1) ? " (danger)" : "",
+                       (marks[i].top - (guide?.object?.supportHeight ?? marks[i].top)) * 100)
+            }.joined(separator: "; ") + " | hazards: " + (hazards.isEmpty ? "none" : hazards.joined(separator: "; ")))
+            // Another one like the target (two books): ask which one (Nils, v9.2), once per search.
+            let same = marks.indices.filter { i in
+                pixels[i] != nil && (look.sameKind.contains(i + 1) || look.names[i + 1].map { Self.sameKind($0, noun) } == true)
+            }
+            if !same.isEmpty, !whichAsked {
+                whichAsked = true
+                let options = same.enumerated().map { (label: $0.offset + 1, centre: marks[$0.element].centre) }
+                if let photo = Self.drawMarks(s.jpeg, at: same.map { pixels[$0] }, labels: options.map { "\($0.label)" },
+                                              box: box, boxLabel: "A") {
+                    await chooseWhich(noun, options: options, photo: photo)
+                }
+            }
         }
     }
 
-    nonisolated static func drawMarks(_ jpeg: Data, at points: [CGPoint?]) -> Data? {
+    /// "Books" / "book", "key" / "green key".
+    nonisolated static func sameKind(_ a: String, _ b: String) -> Bool {
+        func norm(_ s: String) -> String {
+            var t = s.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            if t.hasSuffix("es"), t.count > 4 { t.removeLast(2) } else if t.hasSuffix("s"), t.count > 3 { t.removeLast() }
+            return t
+        }
+        let x = norm(a), y = norm(b)
+        return !x.isEmpty && !y.isEmpty && (x == y || x.hasSuffix(" " + y) || y.hasSuffix(" " + x))
+    }
+
+    /// Talk with the user to find out which of several like things they mean; the chosen one is guided to.
+    /// Guidance is paused meanwhile. Silence keeps the one already locked.
+    private func chooseWhich(_ noun: String, options: [(label: Int, centre: SIMD3<Float>)], photo: Data) async {
+        let id = sessionID
+        guide?.conversing = true
+        defer { if id == sessionID { guide?.conversing = false } }
+        var transcript: [String] = []
+        for turn in 0..<4 {
+            let r = try? await MuseAgent.whichOne(noun: noun, jpeg: photo, others: options.count, transcript: transcript,
+                                                  label: "which_\(id)_\(turn)")
+            guard id == sessionID, let r else { return }
+            log("which_one", "\(r.say) -> \(r.choice ?? "?")")
+            if let choice = r.choice {
+                if !r.say.isEmpty { say(SpokenLine(text: r.say, interrupt: true)) }
+                if choice == "A" {
+                    for o in options { guide?.markOther(at: o.centre, name: noun) }
+                } else if let n = Int(choice), let o = options.first(where: { $0.label == n }) {
+                    await retarget(noun, near: o.centre)
+                }
+                return
+            }
+            guard !r.say.isEmpty else { return }
+            say(SpokenLine(text: r.say, interrupt: true))
+            try? await Task.sleep(for: .milliseconds(150))
+            while speaker.isSpeaking {
+                guard id == sessionID else { return }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            tones.earcon(.listening)
+            try? await Task.sleep(for: .milliseconds(180))
+            let heard = (try? await input.listenOnce()) ?? ""
+            audio.apply()
+            guard id == sessionID else { return }
+            log("which_heard", heard.isEmpty ? "(nothing)" : heard)
+            if heard.isEmpty { return }
+            if CommandParser.parse(heard) == .stop {
+                finish(spoken: "Stopped. Tap to speak a command.", event: "stop")
+                return
+            }
+            tones.earcon(.heard)
+            transcript += ["App: \(r.say)", "User: \(heard)"]
+        }
+    }
+
+    /// The user meant another one: lock it with SAM (nearest find to where it was seen) and guide there.
+    private func retarget(_ noun: String, near centre: SIMD3<Float>) async {
+        let id = sessionID
+        let old = guide?.object?.centre ?? target
+        guard case .success(let list) = await segment(noun), id == sessionID,
+              let c = list.min(by: { simd_distance($0.world, centre) < simd_distance($1.world, centre) }),
+              simd_distance(c.world, centre) < 0.12 else {
+            log("which_one", "retarget failed")
+            return
+        }
+        log("which_one", "retarget \(c.info.id)")
+        select(c)
+        if let old { guide?.markOther(at: old, name: noun) }
+    }
+
+    /// World point -> pixel on the snapshot photo (portrait), nil when off the photo.
+    nonisolated static func photoPoint(_ w: SIMD3<Float>, _ s: FrameSnapshot) -> CGPoint? {
+        let size = SIMD2(Float(s.imageSize.x), Float(s.imageSize.y))
+        let cam = DepthProjector.camera(fromWorld: w, cameraTransform: s.cameraTransform)
+        guard let raw = DepthProjector.project(cameraPoint: cam, intrinsics: s.intrinsics) else { return nil }
+        let p = MaskTarget.portraitPixel(fromRawPixel: raw, rawSize: s.intrinsics.imageSize, imageSize: size)
+        guard p.x >= 0, p.y >= 0, p.x < size.x, p.y < size.y else { return nil }
+        return CGPoint(x: CGFloat(p.x), y: CGFloat(p.y))
+    }
+
+    nonisolated static func photoBox(_ points: [SIMD3<Float>], _ s: FrameSnapshot) -> CGRect? {
+        let px = points.compactMap { photoPoint($0, s) }
+        guard let x0 = px.map(\.x).min(), let x1 = px.map(\.x).max(), let y0 = px.map(\.y).min(), let y1 = px.map(\.y).max() else { return nil }
+        return CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0).insetBy(dx: -6, dy: -6)
+    }
+
+    /// Photo position (0–1, portrait) -> world point from the snapshot's LiDAR (median of a 5x5 window).
+    nonisolated static func worldPoint(photoX x: Float, photoY y: Float, _ s: FrameSnapshot) -> SIMD3<Float>? {
+        let d = s.depth
+        // Inverse of MaskTarget.portraitNormalized: raw = (portrait.y, 1 - portrait.x).
+        let cx = Int(y * Float(d.width)), cy = Int((1 - x) * Float(d.height))
+        var values: [Float] = []
+        for j in (cy - 2)...(cy + 2) where j >= 0 && j < d.height {
+            for i in (cx - 2)...(cx + 2) where i >= 0 && i < d.width {
+                let v = d.depth[j * d.width + i]
+                if v.isFinite, v > 0.1 { values.append(v) }
+            }
+        }
+        guard values.count >= 5, let z = Stats.median(values) else { return nil }
+        let k = s.intrinsics.scaled(to: SIMD2(Float(d.width), Float(d.height)))
+        let cam = DepthProjector.unproject(pixel: SIMD2(Float(cx), Float(cy)), depth: z, intrinsics: k)
+        return DepthProjector.world(fromCamera: cam, cameraTransform: s.cameraTransform)
+    }
+
+    nonisolated static func drawMarks(_ jpeg: Data, at points: [CGPoint?], labels: [String], box: CGRect? = nil,
+                                      boxLabel: String? = nil) -> Data? {
         guard let image = UIImage(data: jpeg) else { return nil }
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         return UIGraphicsImageRenderer(size: image.size, format: format).jpegData(withCompressionQuality: 0.85) { ctx in
             image.draw(at: .zero)
+            ctx.cgContext.setLineWidth(3)
+            if let box {
+                UIColor.green.setStroke()
+                ctx.cgContext.stroke(box)
+                if let boxLabel {
+                    (boxLabel as NSString).draw(at: CGPoint(x: box.minX, y: box.minY - 26),
+                                                withAttributes: [.font: UIFont.boldSystemFont(ofSize: 22), .foregroundColor: UIColor.green])
+                }
+            }
             for (i, p) in points.enumerated() {
                 guard let p else { continue }
                 UIColor.red.setStroke()
-                ctx.cgContext.setLineWidth(3)
                 ctx.cgContext.strokeEllipse(in: CGRect(x: p.x - 14, y: p.y - 14, width: 28, height: 28))
-                let label = "\(i + 1)" as NSString
-                label.draw(at: CGPoint(x: p.x + 16, y: p.y - 22),
-                           withAttributes: [.font: UIFont.boldSystemFont(ofSize: 22), .foregroundColor: UIColor.red])
+                (labels[i] as NSString).draw(at: CGPoint(x: p.x + 16, y: p.y - 22),
+                                             withAttributes: [.font: UIFont.boldSystemFont(ofSize: 22), .foregroundColor: UIColor.red])
             }
         }
     }
@@ -1075,6 +1249,16 @@ final class FindModel {
                 return .output(#"{"error":"unknown candidate_id"}"#)
             }
             if !c.info.name.isEmpty { targetName = c.info.name }
+            // Every lock is checked, the agent's choice too (Muse review of v9.2: the agent path skipped it).
+            let noun = targetName ?? c.info.name
+            let ok = await verify(noun: noun, candidate: c)
+            guard id == sessionID, phase == .locating else { return .ended }
+            log("verify", "agent \(c.info.id) -> \(ok.map { $0 ? "yes" : "no" } ?? "error")")
+            if ok == false {
+                rejected.append(c)
+                return .output(#"{"error":"A second look says this is not a "# + noun
+                               + #". Choose another candidate, find_object again, or ask the user."}"#)
+            }
             let intro = sentence.flatMap(Self.withoutDirections)
             if let sentence, intro != sentence { log("agent_say_trimmed", "\(sentence) -> \(intro ?? "(nothing)")") }
             select(c, intro: intro)
@@ -1191,7 +1375,10 @@ final class FindModel {
         if let scan = f.rollingScan {
             let before = session.obstaclePointCount
             session.addScan(scan, hand: f.hand, cameraTransform: f.cameraTransform)
-            if session.obstaclePointCount != before { log("rolling_scan", "obstacles \(before) -> \(session.obstaclePointCount)") }
+            // Things, not just points (Muse review): a cluttered desk seen from a new angle adds points by design.
+            if session.obstaclePointCount != before {
+                log("rolling_scan", "points \(before) -> \(session.obstaclePointCount), things \(session.obstacleClusters.count)")
+            }
         }
         let out = session.update(time: f.time, hand: f.hand, cameraTransform: f.cameraTransform,
                                  targetDepthDelta: f.targetDepthDelta, speaking: speaker.isSpeaking,
@@ -1525,7 +1712,7 @@ nonisolated final class FindFrameProcessor: NSObject, ARSessionDelegate, @unchec
     /// body and the object). The arm and hand are removed in `GuidanceSession.addScan`, and one scan alone
     /// never adds anything (the v9 live map held the user's own arm).
     private func rollingScan(frame: ARFrame, object: ObjectModel) -> ObstacleMap? {
-        guard object.supportHeight != nil, let data = frame.sceneDepth, let depth = DepthImageReader.read(data) else { return nil }
+        guard let data = frame.sceneDepth, let depth = DepthImageReader.read(data) else { return nil }
         let k = CameraIntrinsics(matrix: frame.camera.intrinsics,
             imageSize: SIMD2(Float(frame.camera.imageResolution.width), Float(frame.camera.imageResolution.height)))
             .scaled(to: SIMD2(Float(depth.width), Float(depth.height)))

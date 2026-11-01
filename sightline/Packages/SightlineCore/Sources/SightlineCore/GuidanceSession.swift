@@ -54,9 +54,11 @@ public struct GuidanceSession: Sendable {
 
     public var handPromptEvery: Double = 7
     public var handSteadyFor: Double = 0.3
-    public var grabNudgeAfter: Double = 8
-    public var giveUpAfterGrab: Double = 20
-    public var belowRepeat: Double = 10
+    public var grabNudgeAfter: Double = 6
+    /// v9.2: 20 -> 12 and 10 -> 6 (Nils: every 8 s wait down to 6 s; the sim found 14 s silences after the
+    /// 6 s nudge with 20 s here).
+    public var giveUpAfterGrab: Double = 12
+    public var belowRepeat: Double = 6
     /// The hand counts as gone from the object when its nearest fingertip is this far from the object.
     public var leaveDistance: Float = 0.10  // arm motion; set from BodyScale in init
     /// While guiding, a fingertip this close to the surface arms the leave check.
@@ -83,13 +85,13 @@ public struct GuidanceSession: Sendable {
     private var handLossSaidAt: Double = -.infinity
     public var handLossRepeat: Double = 10
     public var handLossAfter: Double = 1.0
-    /// The app is talking with the user (hand help): no automatic hand-loss lines meanwhile.
+    /// The app is talking with the user (hand help, which one): guidance is paused meanwhile.
     public var conversing = false
     private var handHelpAsked = false
     /// Last rolling scan (`addScan`), for the two-scans-in-a-row rule.
     private var lastScan: ObstacleMap?
     /// Names of things in the obstacle map (from one Spark look at the lock photo), by cluster centre.
-    private var obstacleNames: [(centre: SIMD3<Float>, name: String)] = []
+    private var obstacleNames: [(centre: SIMD3<Float>, name: String, dangerous: Bool)] = []
     /// The object's spot looked empty (LiDAR farther than the object was thick) since then.
     private var spotEmptySince: Double?
     public var spotEmptyHold: Double = 0.5
@@ -125,6 +127,8 @@ public struct GuidanceSession: Sendable {
     private var lastDetourLine: (text: String, time: Double)?
     private var obstacleStopAt: Double = -.infinity
     private var directClearSince: Double?
+    private var stoppedAxis: StepGuide.Axis?
+    private var stoppedPoint: SIMD3<Float>?
     private var lastObstacleLine: Double = -.infinity
     public var obstacleLineGap: Double = 3
     public var warnRepeat: Double = 10
@@ -141,6 +145,10 @@ public struct GuidanceSession: Sendable {
     private var lastHandPrompt: Double
     private var grabbingSince: Double?
     private var nudged = false
+    /// "Not sure." was said then (the check could not tell).
+    private var unsureAt: Double?
+    private var unsureReminded = false
+    public var unsureRemind: Double = 6
     private var lastObstacleWarning: Double = -.infinity
     /// Grasp history while grabbing.
     /// Kept for the log/overlay; the leave decision no longer depends on it (see header).
@@ -170,10 +178,10 @@ public struct GuidanceSession: Sendable {
     private var stillThereStreak = 0
     /// Last line while guiding (or speech still playing).
     private var lastGuideLine: Double = 0
-    public var silenceLimit: Double = 8
+    public var silenceLimit: Double = 6
     /// After a stall, directions repeat no sooner than this.
     private var quietUntil: Double = -.infinity
-    public var stallQuiet: Double = 8
+    public var stallQuiet: Double = 6
     /// "Double tap if you have it." after repeated "Keep going", once per search.
     private var stallHintSaid = false
     /// A check ran since the last "Grab it": going back to guiding must not re-arm the leave check.
@@ -272,6 +280,8 @@ public struct GuidanceSession: Sendable {
             phase = .grabbing
             grabbingSince = time
             nudged = true
+            unsureAt = time
+            unsureReminded = false
             clearContact()  // the hand must come back to the object before the next automatic check
             return [SpokenLine(text: "Not sure. Double tap if you have it.", interrupt: true)]
         }
@@ -286,6 +296,8 @@ public struct GuidanceSession: Sendable {
             return out
         }
         if phase == .checking { return GuidanceOutput(phase: phase) }
+        // Talking with the user (hand help, which one): no directions over the conversation.
+        if conversing { lastGuideLine = time; return GuidanceOutput(phase: phase) }
         // Lost tracking: hold, then carry on (v8 latched a stop until a new search).
         if !trackingNormal {
             var out = GuidanceOutput(phase: phase)
@@ -499,13 +511,24 @@ public struct GuidanceSession: Sendable {
                 // clear "Right" because the "Forward" after it was blocked, again and again (sim obstacle).
                 var activeAxis: StepGuide.Axis?
                 if case .moving(let a, _, _) = guide.state { activeAxis = a }
-                let axis = activeAxis ?? StepGuide.dominantAxis(o, tolerance: guide.startTolerance).0
-                let blocked = hit(o, axis, clearance: clearance).map { (axis, $0) }
+                // Stopped: plan for the move that was stopped. The at-rest guess of the next move can be another
+                // axis, which read as clear, resumed, and the same move was stopped again (sim hazard: three
+                // "Stop. A knife is in the way.").
+                var axis = activeAxis ?? StepGuide.dominantAxis(o, tolerance: guide.startTolerance).0
+                if activeAxis == nil, case .stopped = obstaclePlan, let s = stoppedAxis { axis = s }
+                var blocked = hit(o, axis, clearance: clearance).map { (axis, $0) }
+                // Stopped for something dangerous: plan around where it was seen, even if this frame's hand
+                // points miss it (a switched fingertip read the stopped move as clear; the hand was sent
+                // into the same stop again, sim hazard).
+                if blocked == nil, case .stopped = obstaclePlan, let p = stoppedPoint, isDangerous(near: p) { blocked = (axis, p) }
                 switch (obstaclePlan, blocked) {
                 // Same obstacle, same move, hand still about where it was warned: no new "Stop.". From
                 // elsewhere (later, coming down onto it) it is a new situation and is planned again.
                 case (.none, let b?) where warnedAt.contains {
-                    $0.axis == b.0 && simd_distance($0.point, b.1) < 0.12 && simd_distance($0.hand, ref) < scale.handSized(0.08)
+                    // A dangerous thing was named with where it is: no second "Stop." for it from anywhere
+                    // (sim hazard: "Stop. A knife is in the way." / "Down" three times).
+                    $0.axis == b.0 && simd_distance($0.point, b.1) < 0.12
+                        && (simd_distance($0.hand, ref) < scale.handSized(0.08) || isDangerous(near: b.1))
                 }:
                     // Already told about this one: no new "Stop." when the hand flickers at its edge
                     // (sim obstacle: "Stop." / "Go slowly." alternating for two minutes).
@@ -513,11 +536,13 @@ public struct GuidanceSession: Sendable {
                     obstaclePlan = .warned(b.0)
                 case (.none, let b?):
                     clearSince = nil
-                    if activeAxis != nil, detours < maxDetours {
+                    if activeAxis != nil, detours < maxDetours || isDangerous(near: b.1) {
                         // The hand is moving toward it: stop it, then plan the way around.
                         obstaclePlan = .stopped(time)
+                        stoppedAxis = b.0
+                        stoppedPoint = b.1
                         guide.release()
-                        let thing = obstacleName(near: b.1).map { "A \($0) is" } ?? "Something's"
+                        let thing = thingIs(near: b.1) ?? "Something's"
                         out.lines = [SpokenLine(text: "Stop. \(thing) in the way.", interrupt: true)]
                         obstacleStopAt = time
                         lastObstacleLine = time
@@ -661,6 +686,23 @@ public struct GuidanceSession: Sendable {
                 if cameNear, heldAway, grasp?.touching != true { return check(&out, "left_object") }
                 if rose(hand, time: time) { return check(&out, "near_then_rose") }
             }
+            // After "Not sure.": the hand went away from the object -> guide again at once; else one reminder
+            // after `unsureRemind` s (v9.2, Nils: 6 s; T11 left up to 20 s of silence after "Not sure.").
+            if let at = unsureAt {
+                if heldAway {
+                    unsureAt = nil
+                    phase = .guiding
+                    resetGrasp()
+                    guide.release()
+                    lastGuideLine = time
+                    out.phase = phase
+                    return out
+                }
+                if !unsureReminded, time - at >= unsureRemind, !speaking {
+                    unsureReminded = true
+                    out.lines.append(SpokenLine(text: "Double tap if you have it.", interrupt: false))
+                }
+            }
             let since = grabbingSince ?? time
             // Told to grab, but the hand sits off the object and nothing happens: it could not feel it.
             // Clearly off the object, not just at the edge of "at your hand" (v6 run 2: "Grab it" every 5 s at 5–6 cm).
@@ -701,7 +743,9 @@ public struct GuidanceSession: Sendable {
         var forward = simd_cross(SIMD3<Float>(0, 1, 0), right)
         forward = simd_length(forward) > 0 ? simd_normalize(forward) : forward
         guide.release()
-        if detours < maxDetours {
+        // Something dangerous (knife, flame, cactus, glass) is always gone around (Nils, v9.2: safety is a KPI
+        // too; touching is fine for ordinary things only).
+        if detours < maxDetours || isDangerous(near: point) && detours < Self.hazardDetours {
             var other = o
             switch axis {
             case .right: other.right = 0
@@ -789,14 +833,17 @@ public struct GuidanceSession: Sendable {
         // Said at most every `warnRepeat` s: the hand creeping at its edge re-plans every frame and said
         // "Go slowly." three times in half a second (sim obstacle).
         // Almost there: "at your fingers" comes next, a warning would only be cut off (sim obstacle).
-        guard time - lastWarnLine >= warnRepeat, time - lastObstacleLine >= obstacleLineGap,
-              o.length > scale.handSized(0.06) else { return }
+        let danger = isDangerous(near: point)
+        // A dangerous thing no way around: always say where it is, right after "Stop." too.
+        guard danger && time - lastWarnLine >= obstacleLineGap
+              || time - lastWarnLine >= warnRepeat && time - lastObstacleLine >= obstacleLineGap
+                 && o.length > scale.handSized(0.06) else { return }
         lastWarnLine = time
         lastObstacleLine = time
         let side = simd_dot(point - ref, right)
-        let thing = obstacleName(near: point).map { "A \($0) is" } ?? "Something is"
+        let thing = thingIs(near: point) ?? "Something is"
         let text: String
-        if axis == .right {
+        if axis == .right || danger {
             // Moving sideways into it: where it is; passing it is up to the user's hand.
             text = "Careful. \(thing) on your \(side > 0 ? "right" : "left")."
         } else {
@@ -823,7 +870,7 @@ public struct GuidanceSession: Sendable {
     /// (Nils, v9.2); unnamed: "Something's ahead."
     private mutating func sayDetour(_ action: String, point: SIMD3<Float>, time: Double, out: inout GuidanceOutput) {
         // Right after "Stop. A bottle is in the way." the thing was just named: the action alone.
-        let named = time - obstacleStopAt < 3 ? "" : obstacleName(near: point).map { "A \($0) is ahead. " } ?? "Something's ahead. "
+        let named = time - obstacleStopAt < 3 ? "" : thingIs(near: point).map { "\($0) ahead. " } ?? "Something's ahead. "
         let text = named + action
         if let last = lastDetourLine, last.text == text, time - last.time < warnRepeat { return }
         // A new plan right after another line (the hand drifted, re-planned) changes silently; the next
@@ -835,9 +882,42 @@ public struct GuidanceSession: Sendable {
     }
 
     /// The name Spark gave the thing at `point` (nearest named cluster within 15 cm), if any.
-    private func obstacleName(near point: SIMD3<Float>) -> String? {
+    private func obstacleName(near point: SIMD3<Float>) -> String? { namedThing(near: point)?.name }
+
+    private func namedThing(near point: SIMD3<Float>) -> (centre: SIMD3<Float>, name: String, dangerous: Bool)? {
         obstacleNames.filter { simd_distance($0.centre, point) < 0.15 }
-            .min { simd_distance($0.centre, point) < simd_distance($1.centre, point) }?.name
+            .min { simd_distance($0.centre, point) < simd_distance($1.centre, point) }
+    }
+
+    private func isDangerous(near point: SIMD3<Float>) -> Bool { namedThing(near: point)?.dangerous ?? false }
+
+    /// "A knife is" / "The other book is" (a second thing like the target, after the user chose).
+    private func thingIs(near point: SIMD3<Float>) -> String? {
+        guard let name = obstacleName(near: point) else { return nil }
+        return name.hasPrefix("other ") ? "The \(name) is" : "A \(name) is"
+    }
+
+    /// Planned ways around one dangerous thing.
+    public static let hazardDetours = 6
+
+    /// Something dangerous Spark saw near the target (a flat knife is below the map's 3 cm floor): a few
+    /// points there, named and gone around.
+    public mutating func addHazard(at p: SIMD3<Float>, name: String) {
+        var map = obstacles ?? ObstacleMap(points: [])
+        let ring = (0..<8).map { i -> SIMD3<Float> in
+            let a = Float(i) / 8 * 2 * .pi
+            return p + SIMD3(0.025 * cos(a), 0.01, 0.025 * sin(a))
+        }
+        map.add([p, p + SIMD3(0, 0.02, 0)] + ring)
+        obstacles = map
+        obstacleNames.append((p, name, true))
+    }
+
+    /// The thing at `centre` is another one like the target (the user chose a different one): said as
+    /// "the other <name>".
+    public mutating func markOther(at centre: SIMD3<Float>, name: String) {
+        obstacleNames.removeAll { simd_distance($0.centre, centre) < 0.05 }
+        obstacleNames.append((centre, "other " + name, false))
     }
 
     /// Points in the map now (log).
@@ -847,8 +927,9 @@ public struct GuidanceSession: Sendable {
     public var obstacleClusters: [ObstacleMap.Cluster] { obstacles?.clusters() ?? [] }
 
     /// Names for `obstacleClusters` (same order); nil or empty = unknown, said as "Something".
-    public mutating func nameObstacles(_ names: [(centre: SIMD3<Float>, name: String)]) {
-        obstacleNames = names.filter { !$0.name.isEmpty }
+    public mutating func nameObstacles(_ names: [(centre: SIMD3<Float>, name: String)], dangerous: Set<String> = []) {
+        let hazards = obstacleNames.filter(\.dangerous)
+        obstacleNames = names.filter { !$0.name.isEmpty }.map { ($0.centre, $0.name, dangerous.contains($0.name)) } + hazards
     }
 
     /// Rolling scan (v9.2): a map built from the current frame (`ObstacleMap.scene`). The user's arm is
@@ -860,8 +941,11 @@ public struct GuidanceSession: Sendable {
             return
         }
         let camera = SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z)
-        var clean = scan.withoutArm(wrist: wrist, camera: camera, scale: scale)
-        clean.carve(Array(hand.joints.values), radius: scale.handSized(0.04))
+        // A still hand is in two scans in a row, and its palm, fingers and a thick sleeve reach past a few cm
+        // from the keypoints (T11 book burst: a quarter of each scan's points within 8 cm of the joints; the
+        // map grew 573 -> 909 points in 10 s). The hand's shape from its measured size, plus a sleeve margin.
+        var clean = scan.withoutArm(wrist: wrist, camera: camera, scale: scale, margin: scale.handSized(0.02))
+        clean.carveHand(hand.joints, camera: camera, scale: scale)
         var map = obstacles ?? ObstacleMap(points: [])
         lastScan = map.merge(scan: clean, previous: lastScan)
         obstacles = map
@@ -969,6 +1053,7 @@ public struct GuidanceSession: Sendable {
     }
 
     private mutating func resetGrasp() {
+        unsureAt = nil
         goalShift = .zero
         touched = false
         opposed = false

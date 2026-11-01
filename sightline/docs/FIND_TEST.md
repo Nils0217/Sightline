@@ -33,7 +33,7 @@ VoiceOver on: double tap = "I have it", two-finger double tap = start / stop; sw
 2. **Book ahead.** Tap, "find my book". Expect "Looking for the book.", "Found the book. Ahead, …, N centimetres.", "Hold your hand out.", "I see your hand.", then short directions ("Right, 20 centimetres.", "A little down.", "Stop."), then "Stop. The book is at your fingers."
 3. **Pick it up.** Lift the book. Expect "Checking." within about a second, then "Got it. You have the book."
 4. **Lift something else.** Search the book again, but lift a different object near it. Expect "The book is still there." and directions again.
-5. **Not sure.** If you hear "Not sure. Double tap if you have it.", double tap while holding it: expect "Okay. You have the book." (log `user_confirmed`).
+5. **Not sure.** (8f covers the wait.) If you hear "Not sure. Double tap if you have it.", double tap while holding it: expect "Okay. You have the book." (log `user_confirmed`).
 5a. **Hand without touching (v9.1).** Search the book; when guided, put your hand on the table about 15 cm from the book, then lift it away, twice. Expect no "Checking." Then touch the book and lift your empty hand away: one "Checking." is allowed (contact candidate), and it must end in "The book is still there."
 5b. **Tall object straight up (v9.1).** Search a bottle, grip it, lift it straight up without moving sideways. Expect "Checking." within about a second (log reason `near_then_rose`).
 5c. **Holding still (v9.2).** Grip the object and do not move while directions repeat. After the same direction 4 times, expect one "Checking." (reason `stalled`); no repeated checks after that.
@@ -41,10 +41,14 @@ VoiceOver on: double tap = "I have it", two-finger double tap = start / stop; sw
 7. **Body moves.** During directions, shift or turn your body a little. Directions continue (from your new facing); no stop.
 8. **No false obstacle (v9.1, device failure).** Nothing between hand and object, your other hand and sleeve in view: expect no "Something's in the way" at all.
 8a. **Obstacle (v9.2).** A bottle between your hand and the object, placed before you search: expect one line naming it and the side to pass it ("A bottle is ahead. Go around it on your right." or "Careful. A bottle is on your left."), then directions straight on. Touching it is fine; there is no stop and no planned detour. Log `obstacle_names` shows what Spark called each thing.
+8a2. **Danger (v9.2).** A knife (or scissors) lying flat between your hand and the object: expect "Stop. A knife is in the way." and directions that go around it, never into it. Log `look_around ... hazards: knife at ...`.
+8a3. **Two of a kind (v9.2).** Two books (or cups) near each other: expect a short question telling them apart, answer it; guidance goes to the one you chose (log `which_one`). Say nothing: it keeps the first.
+8a4. **No table height (v9.2).** Repeat the T11 mug search on the cluttered dresser: log `object ... support none obstacles N` with N > 0 now.
 8b. **Put down later (rolling scan).** Start a search, then put a cup between your hand and the object: within about 2 s it should be in the map (log `rolling_scan obstacles A -> B`) and named as "Something" (it was not in the naming photo).
 8c. **Holding it already.** Pick the object up yourself before guidance reaches it and keep your hand still: after a few repeats of the same direction, expect "Checking." and "Got it." (check reason `stalled`). For a tall object (bottle, box), just lifting it off its spot should start a check by itself (reason `spot_empty`).
 8d. **Hand gone.** Put your hand down out of view for 15 s: "I can't see your hand.", then "I need to see your hand to guide you." and a listening tone. Say something ("where should my hand be?"): expect a short spoken answer. Silence ends the talk; guidance continues when the hand is back.
-8e. **Hand on it, not picking up.** Rest your hand on top of the object without lifting for 20 s: expect "It's right below your hand." (every 10 s).
+8e. **Hand on it, not picking up.** Rest your hand on top of the object without lifting for 12 s: expect "It's right below your hand." (every 6 s).
+8f. **Not sure (v9.2).** After "Not sure. Double tap if you have it.", wait: one reminder after 6 s. Move your hand away from the object: directions come back at once.
 9. **Far object.** Object about 1 m away: directions still come (no "out of reach"); lean or step as you need.
 10. **Stop.** Tap in each phase (listening, looking, guiding, checking): "Stopped." each time, nothing continues afterwards.
 11. **Room scan.** "scan the room", turn slowly, tap when done: "Saving the room." then "Room saved. …"

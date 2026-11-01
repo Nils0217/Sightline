@@ -140,6 +140,22 @@ import Testing
         var t = 0.0
         #expect(run(&s, Array(repeating: far, count: 40) + Array(repeating: nil, count: 90), t: &t).isEmpty)
     }
+
+    /// After "Not sure.": one reminder after 6 s while the hand stays on it.
+    @Test func unsureRemindsOnceAfterSixSeconds() {
+        var s = GuidanceSession(targetName: "phone", target: object.centre, object: object, cameraTransform: downCamera, time: 0)
+        s.beginManualCheck()
+        _ = s.resolveCheck(nil, time: 0)
+        var said: [(Double, String)] = []
+        var t = 0.0
+        for _ in 0..<300 {
+            t += 1.0 / 30
+            said += s.update(time: t, hand: hand(object.centre + SIMD3(0, 0.01, 0)), cameraTransform: downCamera,
+                             targetDepthDelta: 0, speaking: false).lines.map { (t, $0.text) }
+        }
+        let reminders = said.filter { $0.1 == "Double tap if you have it." }
+        #expect(reminders.count == 1 && abs(reminders[0].0 - 6) < 0.1, "\(said)")
+    }
 }
 
 @Suite struct BodyScaleTests {

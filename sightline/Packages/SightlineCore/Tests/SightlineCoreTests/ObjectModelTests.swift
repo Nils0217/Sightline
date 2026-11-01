@@ -323,4 +323,26 @@ func tableScene(objectDepth: Float, glossyNoise: Bool = false) -> (DepthImage, S
         let c = ObstacleMap(points: a + b + [[0.6, 0, -0.4]]).clusters()
         #expect(c.count == 2 && c[0].count == 5 && abs(c[0].top - 0.12) < 0.001)
     }
+
+    /// v9.2: no support height still gives a map; the table counts, except where the hand lands.
+    @Test func noSupportKeepsTheTableExceptTheLandingPatch() {
+        let obj = ObjectModel(points: (0..<5).map { SIMD3<Float>(0.01 * Float($0), 0.005, -0.5) }, supportHeight: nil, isFlat: true)
+        let table: [SIMD3<Float>] = stride(from: Float(-0.4), through: 0.4, by: 0.03).flatMap { x in
+            stride(from: Float(-0.8), through: -0.3, by: 0.03).map { z in SIMD3(x, 0, z) } }
+        let map = ObstacleMap.scene(table, object: obj, camera: [0, 0.6, 0])
+        #expect(map != nil)
+        #expect(map!.points.contains { simd_distance($0, [0.3, 0, -0.5]) < 0.03 })
+        #expect(!map!.points.contains { obj.horizontalDistance($0) < 0.08 })
+    }
+    /// The hand's own points go, a bottle 8 cm beside the fingertip stays (a 9 cm ball took it).
+    @Test func carveHandKeepsThingsBesideTheHand() {
+        let tip = SIMD3<Float>(0, 0.1, -0.5)
+        // Along the hand toward the chest camera (where the arm comes from), 1 cm above the bones.
+        let back = simd_normalize(SIMD3<Float>(0, 0.5, 0) - tip)
+        let handSurface = (0..<10).map { tip + back * 0.015 * Float($0) + SIMD3<Float>(0, 0.01, 0) }
+        let bottle = SIMD3<Float>(0.08, 0.1, -0.5)
+        var map = ObstacleMap(points: handSurface + [bottle])
+        map.carveHand([.indexTip: tip], camera: [0, 0.5, 0])
+        #expect(map.points == [bottle])
+    }
 }

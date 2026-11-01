@@ -59,6 +59,10 @@ struct Scenario {
     var armAtLock = false
     /// Put down after the lock photo: only the rolling scan can see it (v9.2).
     var lateObstacleXZ: SIMD2<Float>?
+    /// A knife lying flat (1.5 cm, below the map's 3 cm floor): only Spark's hazard look finds it (v9.2).
+    var knifeXZ: SIMD2<Float>?
+    /// The lock frame gave no support height (T11 mug on a cluttered dresser).
+    var noSupport = false
     /// Camera yaw (degrees, + = right) at the start; the object may be out of view (scan phase).
     var startYaw: Float = 0
     /// How the user holds the hand when first asked (world, m), relative to straight ahead.
@@ -149,6 +153,13 @@ let scenarios: [Scenario] = {
     list.append(s)
     s = Scenario(name: "arm_at_lock", note: "hand and arm already resting on the table in the lock photo")
     s.armAtLock = true
+    list.append(s)
+    s = Scenario(name: "hazard", note: "a knife lies flat between hand and phone: must be gone around (Spark names it)")
+    s.knifeXZ = SIMD2(0.05, -0.42)
+    list.append(s)
+    s = Scenario(name: "no_support", note: "no support height at lock, cups beside the path (T11 mug)")
+    s.noSupport = true
+    s.clutterXZ = [SIMD2(-0.12, -0.5), SIMD2(0.4, -0.45)]
     list.append(s)
     s = Scenario(name: "late_obstacle", note: "a bottle put down between hand and phone after the lock photo (rolling scan)")
     s.lateObstacleXZ = SIMD2(0.05, -0.42)
@@ -612,7 +623,7 @@ func run(_ sc: Scenario, seed: UInt64, maxTime: Double = 150) -> RunResult {
     user.facing = yaw
     let shift = cam.xAxis * sc.targetOnlyBias
     let seenPoints = objectPoints(sc).map { cam.perceived($0, biasPerMetre: sc.biasPerMetre) + shift }
-    let object = ObjectModel(points: seenPoints, supportHeight: tableY, isFlat: sc.kind != .bottle)
+    let object = ObjectModel(points: seenPoints, supportHeight: sc.noSupport ? nil : tableY, isFlat: sc.kind != .bottle)
     let camPos = SIMD3(cam.transform.columns.3.x, cam.transform.columns.3.y, cam.transform.columns.3.z)
     let obstacles = ObstacleMap.scene(lockScene(sc, cam: cam, rng: &rng), object: object, camera: camPos)
     var session = GuidanceSession(targetName: sc.kind.rawValue, target: object.centre, object: object, obstacles: obstacles,
@@ -628,6 +639,7 @@ func run(_ sc: Scenario, seed: UInt64, maxTime: Double = 150) -> RunResult {
         })
     }
     nameThings()
+    if let k = sc.knifeXZ { session.addHazard(at: SIMD3(k.x, tableY + 0.01, k.y), name: "knife") }
     var lastRolling = t
     var pendingCheck: (due: Double, held: Bool, atSpot: Bool?, spark: Bool?)?
     var frozenFaultHand: HandKeypoints?
@@ -699,6 +711,7 @@ func run(_ sc: Scenario, seed: UInt64, maxTime: Double = 150) -> RunResult {
         }
         // Ground truth: did a joint go into the obstacle / a cup (the sim has no collision response)?
         let solids = (sc.obstacleXZ.map { [($0, Float(0.23))] } ?? []) + (sc.lateObstacleXZ.map { [($0, Float(0.23))] } ?? [])
+            + (sc.knifeXZ.map { [($0, Float(0.03))] } ?? [])
             + sc.clutterXZ.map { ($0, Float(0.11)) }
         let inside = solids.contains { xz, height in
             user.joints(sc).values.contains { j in

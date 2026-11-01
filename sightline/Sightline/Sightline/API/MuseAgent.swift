@@ -125,25 +125,71 @@ nonisolated enum MuseAgent {
                         noun: "room_scan", images: [jpeg], effort: .medium, label: label)
     }
 
-    /// Things standing near the target, marked with numbered red circles on the photo: a short name for each
-    /// (v9.2, Nils: "say there's <name> ahead of you"; the user remembers its shape and size). One call per
-    /// search, effort minimal, never on the guidance loop. Unknown marks are left out.
-    static func nameMarks(jpeg: Data, count: Int, label: String) async throws -> [Int: String] {
-        let text = try await reply("This photo is from a blind user's chest camera. Numbered red circles 1 to \(count) mark things "
-                                   + "standing near the object they are reaching for. For each number, give the short common name "
-                                   + "of the thing under that circle (one or two words, for example bottle, cup, lamp, box). If a "
-                                   + "circle is on nothing, on the table, on a hand or arm, or you are unsure, leave that number out. "
-                                   + #"Answer only with JSON, for example {"1":"bottle","2":"cup"}."#,
-                                   noun: "obstacle_names", images: [jpeg], effort: .minimal, label: label)
+    /// What one look at the photo around the target says (v9.2): names for the numbered marks, which of them
+    /// are dangerous, which look like the target itself, and dangerous things anywhere near it (a knife lying
+    /// flat is too low for the depth map). Nils: touching ordinary things is fine, dangerous ones must be seen.
+    struct LookAround: Sendable {
+        var names: [Int: String] = [:]
+        var dangerous: Set<Int> = []
+        var sameKind: Set<Int> = []
+        /// Name and position on the photo (0–1, x left to right, y top to bottom).
+        var hazards: [(name: String, x: Float, y: Float)] = []
+    }
+
+    /// One call per search, effort minimal, never on the guidance loop. Throws on a network failure.
+    static func lookAround(jpeg: Data, count: Int, noun: String, label: String) async throws -> LookAround? {
+        let marks = count == 0 ? "There are no numbered marks. "
+            : "Numbered red circles 1 to \(count) mark things standing near it. "
+        let text = try await reply("This photo is from a blind user's chest camera. They are reaching for their \(noun), "
+                                   + "boxed in green. " + marks
+                                   + "1) For each number, give the short common name of the thing under that circle (one or "
+                                   + "two words); leave out circles on nothing, on the table, or on a hand or arm. "
+                                   + "2) List the numbers that are dangerous to touch: sharp, hot, burning, spiky, broken glass, "
+                                   + "or a blade. 3) List the numbers that are another \(noun) (the same kind of thing). "
+                                   + "4) List anything dangerous to touch anywhere near the green box that has no number "
+                                   + "(for example a knife, scissors, a lit candle, a lighter, a cactus, an iron), with the centre "
+                                   + "as x and y from 0 to 1 (x left to right, y top to bottom). "
+                                   + #"Answer only with JSON: {"names":{"1":"bottle"},"dangerous":[],"same":[],"hazards":[{"name":"knife","x":0.4,"y":0.7}]}"#,
+                                   noun: "look_around", images: [jpeg], effort: .minimal, label: label)
         guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"),
               let data = String(text[start...end]).data(using: .utf8),
-              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return [:] }
-        var names: [Int: String] = [:]
-        for (k, v) in json {
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        var out = LookAround()
+        for (k, v) in json["names"] as? [String: Any] ?? [:] {
             if let i = Int(k), let name = (v as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-               !name.isEmpty, name.split(separator: " ").count <= 3 { names[i] = name }
+               !name.isEmpty, name.split(separator: " ").count <= 3 { out.names[i] = name }
         }
-        return names
+        func ints(_ key: String) -> Set<Int> {
+            Set((json[key] as? [Any] ?? []).compactMap { ($0 as? Int) ?? ($0 as? String).flatMap { Int($0) } })
+        }
+        out.dangerous = ints("dangerous")
+        out.sameKind = ints("same")
+        for h in json["hazards"] as? [[String: Any]] ?? [] {
+            guard let name = (h["name"] as? String)?.lowercased(), let x = (h["x"] as? NSNumber)?.floatValue,
+                  let y = (h["y"] as? NSNumber)?.floatValue, (0...1).contains(x), (0...1).contains(y) else { continue }
+            out.hazards.append((name, x, y))
+        }
+        return out
+    }
+
+    /// Several things like the target: one turn of a short talk to find out which one the user means. The
+    /// photo marks the locked one "A" and the others 1, 2, ... Returns what to say and, once clear, the choice.
+    static func whichOne(noun: String, jpeg: Data, others: Int, transcript: [String], label: String) async throws -> (say: String, choice: String?) {
+        let talk = transcript.isEmpty ? "Nothing has been said yet." : "Conversation so far:\n" + transcript.joined(separator: "\n")
+        let text = try await reply("A blind user asked for their \(noun). On this chest-camera photo the app found one marked A, "
+                                   + "and \(others) more things that may also be a \(noun), marked with numbers. \(talk)\n"
+                                   + "If it is not yet clear which one they want, ask one short question that tells them apart "
+                                   + "by what a blind person can know: where it is (left, right, nearer, further), size, shape, "
+                                   + "what it is made of or what is in it, or a colour they may know. Once it "
+                                   + "is clear, say a short confirmation. At most 20 words. "
+                                   + #"Answer only with JSON: {"say":"...","choice":null} with choice "A" or the number once clear."#,
+                                   noun: "which_one", images: [jpeg], effort: .minimal, label: label)
+        guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"),
+              let data = String(text[start...end]).data(using: .utf8),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return ("", nil) }
+        let say = (json["say"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let choice = (json["choice"] as? String) ?? (json["choice"] as? Int).map(String.init)
+        return (say, choice?.uppercased())
     }
 
     /// The hand has been out of view a while and the user said something (v9.2, Nils: "I need to see your hand

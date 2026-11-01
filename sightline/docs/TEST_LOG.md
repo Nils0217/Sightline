@@ -296,7 +296,11 @@ Honest limits: the simulator's hand and object are idealised, so 20/20 says the 
 
 Also in the mug search: `support none`, so there was no obstacle map at all next to a glass pitcher and bottles; the first direction was one 85 cm move.
 
-Open points: wrong identity above the verify threshold; no obstacle map without a support height; the target's own edge named as an obstacle; the map growing several hundred points per second (check what the rolling scan adds); two "Not sure" ends with no double tap.
+Follow-up (2026-11-01): Spark now verifies every single lock (no 0.75 threshold); a rejected lock is remembered so the scan skips it, and after 3 rejections the search ends with "I can't find the X." Rolling-scan growth, replayed offline from `burst_1_1` (36 frames, same filters): 270–375 points per scan, about a quarter within 8 cm of the six hand keypoints (palm, fingers and a fleece sleeve beyond the 4 cm carve), the rest real clutter left of and in front of the book; addScan now carves 9 cm around the joints and widens the arm cone by 4 cm. Measured reach in this run: 37 cm.
+
+Second follow-up (2026-11-01, Nils's decisions on the Muse Spark and GPT reviews): every 8 s wait is 6 s; the agent's choice is verified too; rejected locks fall back to the likeliest one ("I'm not sure this is the X."); one look-around call per lock names things, flags dangerous ones and adds flat hazards (sim `hazard`: 20/20, no touch); a same-kind thing starts a which-one talk; no support height keeps every surface except the landing patch (sim `no_support` 20/20); hand capsules from the measured hand replace the 9 cm ball (replay of `burst_1_1`: the ball removed 61–137 points per scan, about half of them below the hand, i.e. clutter under it; capsules remove 0–24); "Not sure" reminder after 6 s, hand away -> guide again. Live Spark test of the utensil-holder photo not run (no key in `sightline/.env`). 202 tests pass; iOS build succeeds.
+
+Open points: wrong identity above the verify threshold (fixed in code, device pending); no obstacle map without a support height; the target's own edge named as an obstacle; the map growing several hundred points per second (check what the rolling scan adds); two "Not sure" ends with no double tap.
 
 ## Template
 ```

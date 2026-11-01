@@ -235,20 +235,30 @@ public struct ObstacleMap: Sendable {
     /// 60 cm of it, more than a hand-sized 4 cm from its surface (its unmasked edge and edge pixels; 8 cm
     /// hid a bottle standing 2.5 cm from a phone, and the hand came down on it, sim 2026-10-31),
     /// and away from the user's own body (an arm-sized 25 cm around the chest camera). Single 3 cm cells
-    /// without a neighbour are dropped as noise. Nil without a support height (cannot tell the table).
+    /// without a neighbour are dropped as noise.
+    ///
+    /// Without a support height (v9.2, T11 mug on a cluttered dresser: no map at all before): the surface is
+    /// not guessed. Every point counts, the table too (it is what a hand moving down hits), except the patch
+    /// the hand lands on: within a hand-sized 10 cm of the object's outline and no higher than its lower part.
     public static func scene(_ world: [SIMD3<Float>], object: ObjectModel, camera: SIMD3<Float>,
                              scale: BodyScale = BodyScale()) -> ObstacleMap? {
-        guard let support = object.supportHeight else { return nil }
         let nearObject = scale.handSized(0.04), body = scale.arm(0.25)
+        let ys = object.points.map(\.y).sorted()
+        let lowPart = ys.isEmpty ? object.centre.y : ys[ys.count / 10] + 0.01
         var cells: [SIMD3<Int32>: SIMD3<Float>] = [:]
         for w in world {
-            let h = w.y - support
             var flat = w - object.centre
             flat.y = 0
             var fromBody = w - camera
             fromBody.y = 0
-            guard h > 0.03, h < 0.5, simd_length(flat) < 0.6, simd_length(fromBody) > body,
-                  object.distanceToSurface(w) > nearObject else { continue }
+            guard simd_length(flat) < 0.6, simd_length(fromBody) > body, object.distanceToSurface(w) > nearObject else { continue }
+            if let support = object.supportHeight {
+                let h = w.y - support
+                guard h > 0.03, h < 0.5 else { continue }
+            } else {
+                guard w.y < lowPart + 0.5, w.y > lowPart - 0.5 else { continue }
+                if w.y <= lowPart, object.horizontalDistance(w) < scale.handSized(0.10) { continue }
+            }
             let key = SIMD3<Int32>(Int32((w.x / 0.03).rounded()), Int32((w.y / 0.03).rounded()), Int32((w.z / 0.03).rounded()))
             cells[key] = w
         }
@@ -316,6 +326,53 @@ public struct ObstacleMap: Sendable {
         return scan
     }
 
+    /// The hand's own surface (v9.2, Nils: use the measured hand as the standard, and the distances between
+    /// the marked points): capsules from each fingertip to its knuckle (else the wrist, else the palm), the
+    /// palm from the wrist to the knuckles, all sized from the measured hand length (`BodyScale.handSized`;
+    /// for an 18 cm hand a finger is 3 cm round including keypoint error, the palm 5 cm). Replaces a 9 cm
+    /// ball around every joint, which also took real things beside the hand.
+    /// Usually only fingertips are found (T11 bursts: the wrist in 3 of 36 frames); then the wrist is put one
+    /// hand length from the fingertips toward the chest camera, where the arm comes from.
+    public mutating func carveHand(_ seen: [HandJoint: SIMD3<Float>], camera: SIMD3<Float>, scale: BodyScale = BodyScale()) {
+        guard !seen.isEmpty, !points.isEmpty else { return }
+        var joints = seen
+        if joints[.wrist] == nil {
+            let tips = HandJoint.tips.compactMap { joints[$0] }
+            let front = tips.isEmpty ? Array(joints.values) : tips
+            let centre = front.reduce(SIMD3<Float>(repeating: 0), +) / Float(front.count)
+            var back = camera - centre
+            back = simd_length(back) > 1e-4 ? simd_normalize(back) : SIMD3(0, 0, 1)
+            joints[.wrist] = centre + back * scale.handSized(0.17)
+            if !HandJoint.palm.dropFirst().contains(where: { joints[$0] != nil }) {
+                joints[.middleMCP] = centre + back * scale.handSized(0.09)
+            }
+        }
+        let palmJoints = HandJoint.palm.compactMap { joints[$0] }
+        let palm = palmJoints.isEmpty ? nil : palmJoints.reduce(SIMD3<Float>(repeating: 0), +) / Float(palmJoints.count)
+        let base: [HandJoint: HandJoint] = [.thumbTip: .thumbCMC, .indexTip: .indexMCP, .middleTip: .middleMCP,
+                                             .ringTip: .ringMCP, .littleTip: .littleMCP]
+        var capsules: [(SIMD3<Float>, SIMD3<Float>, Float)] = []
+        let finger = scale.handSized(0.03), palmRadius = scale.handSized(0.05)
+        for tip in HandJoint.tips {
+            guard let t = joints[tip] else { continue }
+            let b = base[tip].flatMap { joints[$0] } ?? joints[.wrist] ?? palm ?? t
+            capsules.append((t, b, finger))
+            if let palm { capsules.append((b, palm, finger)) }
+        }
+        if let palm { capsules.append((palm, joints[.wrist] ?? palm, palmRadius)) }
+        for j in palmJoints { capsules.append((j, j, palmRadius * 0.8)) }
+        points.removeAll { p in
+            capsules.contains { a, b, r in
+                let ab = b - a, l2 = simd_length_squared(ab)
+                let s = l2 > 1e-8 ? min(1, max(0, simd_dot(p - a, ab) / l2)) : 0
+                return simd_distance_squared(a + ab * s, p) < r * r
+            }
+        }
+    }
+
+    /// Points known from elsewhere (a hazard Spark saw), kept as they are.
+    public mutating func add(_ more: [SIMD3<Float>]) { points += more }
+
     /// Space a hand joint has occupied is free: remove points within `radius` of these joints.
     public mutating func carve(_ joints: [SIMD3<Float>], radius: Float) {
         guard !joints.isEmpty, !points.isEmpty else { return }
@@ -326,11 +383,11 @@ public struct ObstacleMap: Sendable {
     /// Without the user's own arm: a cone from the wrist (hand-sized 6 cm) widening toward the chest
     /// camera (plus an arm-sized 14 cm there). The real arm runs from the wrist to a shoulder beside the
     /// camera; the elbow drops below that line.
-    public func withoutArm(wrist: SIMD3<Float>, camera: SIMD3<Float>, scale: BodyScale = BodyScale()) -> ObstacleMap {
+    public func withoutArm(wrist: SIMD3<Float>, camera: SIMD3<Float>, scale: BodyScale = BodyScale(), margin: Float = 0) -> ObstacleMap {
         let axis = camera - wrist
         let len2 = simd_length_squared(axis)
         guard len2 > 1e-6 else { return self }
-        let base = scale.handSized(0.06), grow = scale.arm(0.14)
+        let base = scale.handSized(0.06) + margin, grow = scale.arm(0.14)
         return ObstacleMap(points: points.filter { p in
             let s = min(1, max(0, simd_dot(p - wrist, axis) / len2))
             return simd_distance(wrist + axis * s, p) > base + grow * s
@@ -340,7 +397,6 @@ public struct ObstacleMap: Sendable {
     /// From the lock frame: unprojected depth outside the target mask (dilated), then `scene`.
     public static func build(mask: SourceMask, depth: DepthImage, intrinsics: CameraIntrinsics,
                              cameraTransform t: simd_float4x4, object: ObjectModel, scale: BodyScale = BodyScale()) -> ObstacleMap? {
-        guard object.supportHeight != nil else { return nil }
         let r = mask.record
         let sw = Float(r.sourceWidth), sh = Float(r.sourceHeight)
         let k = intrinsics.scaled(to: SIMD2(Float(depth.width), Float(depth.height)))

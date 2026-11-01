@@ -119,8 +119,8 @@ import simd
             let out = s.update(time: Double(i), hand: hand([0, 0, -0.4]), cameraTransform: matrix_identity_float4x4,
                                targetDepthDelta: nil, speaking: false)
             #expect(!out.requestCheck)
-            // After 20 s without a pick-up it guides again (v9.1: no dead end), so tones may return.
-            if i < 21 { #expect(out.toneDistance == nil) }
+            // After 12 s without a pick-up it guides again (v9.1: no dead end; v9.2: 20 -> 12 s), so tones may return.
+            if i < 13 { #expect(out.toneDistance == nil) }
         }
     }
     @Test func overshootIsDetectedWithoutRequestingMoreMovement() {

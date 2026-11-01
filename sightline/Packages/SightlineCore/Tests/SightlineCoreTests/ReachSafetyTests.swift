@@ -309,4 +309,18 @@ import simd
         #expect(turned.lines.map(\.text) == ["Good. Hold your hand out."] && s.endReason == nil)
     }
 
+
+    /// v9.2: something dangerous is never just "Careful": the hand is stopped and sent around it.
+    @Test func dangerousThingIsGoneAround() {
+        var s = GuidanceSession(targetName: "phone", target: [0.3, 0, -0.4], cameraTransform: camera, time: 0)
+        s.addHazard(at: [0.15, 0, -0.4], name: "knife")
+        let h = hand([0, 0, -0.4])
+        var lines: [String] = []
+        for i in 0..<240 {
+            lines += s.update(time: Double(i) / 30, hand: h, cameraTransform: camera, targetDepthDelta: nil,
+                              speaking: false).lines.map(\.text)
+        }
+        #expect(!lines.contains { $0.hasPrefix("Right") || $0.hasPrefix("Keep going right") }, "\(lines)")
+        #expect(lines.contains { $0.contains("knife") })
+    }
 }
