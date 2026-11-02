@@ -330,6 +330,8 @@ Changes (2026-11-01, Nils: "scan the room mode shouldn't ask user tap to stop"; 
 
 208 tests pass; sim unchanged (positive 20/20, faults 0/20); iOS build succeeds. Device pending.
 
+Follow-up (2026-11-01, Nils: "why not let the LLM read the map first and infer the position from related things"): the map held only names + positions in the saved ARKit frame, useless without a match. Now the room scan also saves what each object stands on and fixed landmarks; relations are said with no frame; landmark alignment (Spark lists the view, RANSAC over name matches, 4 degrees of freedom: turn about gravity + shift) gives the saved frame back without ARKit. 215 tests (relations, old files without the new fields, a known 70° turn recovered within 1 cm, a moved cup left out, 2 movable things rejected, 2 fixed accepted); iOS build succeeds. Device pending.
+
 ## Template
 ```
 ## Tn: <what> (<date> <time>, <log folder>)
