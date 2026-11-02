@@ -161,7 +161,9 @@ public enum AgentTools {
         from the photo, say so and offer the nearer one. \
         (4) Nothing found here: if room_items lists it, or find_object returns room_map, it is in another part \
         of the room: call scan_for at once (it turns the user toward where it was saved). Do not keep calling \
-        find_object on this view for things the room map has elsewhere. \
+        find_object on this view for things the room map has elsewhere. When room_items has no directions yet, \
+        say what it was on and next to ("Your tumbler was on the desk, next to the laptop."); the user may know \
+        where that is. \
         A candidate with confidence 0.5 or more is usually right; do not drop it for a different object \
         unless the user rejects it. Do not call find_object again for a phrase in not_found; use scan_for. \
         Say everything the simplest way a blind person can act on at once: plain spoken words, the most \

@@ -122,8 +122,8 @@ nonisolated enum MuseAgent {
     /// number in `items` (RoomInventory.describe), nil = no idea. Effort medium (reasoning, once per search).
     static func guessNear(noun: String, items: String, label: String) async throws -> Int? {
         let text = try await reply("A blind user is looking for their \(noun). It is not in view and was never seen in "
-                                   + "this room. These things were seen in the room (number. name: position relative to "
-                                   + "the user):\n\(items)\nWhere is a \(noun) most likely to be? Answer only with the "
+                                   + "this room. These things were seen in the room (number. name: where it is, what it "
+                                   + "stands on and what is next to it):\n\(items)\nWhere is a \(noun) most likely to be? Answer only with the "
                                    + "number of the one thing it is most likely on, in or next to, or 'none' if no "
                                    + "item makes it likely.",
                                    noun: noun, images: [], effort: .medium, label: label)
@@ -133,12 +133,16 @@ nonisolated enum MuseAgent {
     /// Room scan: the objects a blind user might ask for in this photo, as
     /// `{"objects":[{"name":..,"x":..,"y":..}]}` (RoomInventory.parseSparkObjects).
     static func listObjects(jpeg: Data, label: String) async throws -> String {
+        // 2026-11-01 (Nils: let the LLM infer from related things): furniture is listed too, as fixed landmarks for
+        // aligning the map on a later launch, and each object says what it stands on.
         try await reply("You help a blind user remember where things are in their room. List up to 12 separate, movable "
                         + "objects in this photo that they might later ask for (for example keys, phone, cup, book, "
-                        + "glasses, remote, bag, bottle). Skip furniture, walls and anything you are unsure about. "
-                        + "For each, give a short common name and the centre of the object in the photo as x and y "
-                        + "from 0 to 1 (x left to right, y top to bottom). Answer only with JSON: "
-                        + #"{"objects":[{"name":"cup","x":0.42,"y":0.61}]}"#,
+                        + "glasses, remote, bag, bottle), and up to 4 big things that do not move (desk, table, shelf, "
+                        + "lamp, bed, sofa, sink, fridge, TV, door) with \"fixed\": true. Skip walls and anything you "
+                        + "are unsure about. For each, give a short common name and the centre of it in the photo as x and y "
+                        + "from 0 to 1 (x left to right, y top to bottom); for a movable object also what it stands on "
+                        + "(\"on\": \"desk\") when you can see it. Answer only with JSON: "
+                        + #"{"objects":[{"name":"cup","x":0.42,"y":0.61,"on":"desk"},{"name":"desk","x":0.5,"y":0.8,"fixed":true}]}"#,
                         noun: "room_scan", images: [jpeg], effort: .medium, label: label)
     }
 

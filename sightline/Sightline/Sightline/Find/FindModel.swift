@@ -85,6 +85,11 @@ final class FindModel {
     /// Agent: phrases find_object looked for with nothing found in this search, and finds so far.
     @ObservationIgnored private var notFound: [String] = []
     @ObservationIgnored private var agentFinds = 0
+    /// Landmark alignment of the saved room (Spark lists what is in view, matched to the saved names).
+    @ObservationIgnored private var alignInFlight = false
+    @ObservationIgnored private var alignsThisSearch = 0
+    @ObservationIgnored private var alignsThisLaunch = 0
+    static let maxAlignsPerSearch = 2, maxAlignsPerLaunch = 6
     /// Photos with the latest find_object candidates boxed and labelled, sent to Spark after the tool outputs.
     @ObservationIgnored private var agentPhotos: [(note: String, jpeg: Data)] = []
     @ObservationIgnored private var lastJPEG: Data?
@@ -537,6 +542,7 @@ final class FindModel {
         lastCheckUnsure = false
         userClaimed = false
         burstsThisSearch = 0
+        alignsThisSearch = 0
         mapPlanner = nil
         guide = nil
         guidePhase = "-"
@@ -551,6 +557,7 @@ final class FindModel {
     private func startFind(_ noun: String) {
         beginSession(name: noun)
         log("command", noun)
+        tryAlignRoom()
         // Instant local cue (G4): the user hears something before any network call.
         speaker.say("Looking for the \(noun).")
         let id = sessionID
@@ -565,6 +572,7 @@ final class FindModel {
     private func startAgent(heard: String) {
         beginSession(name: nil)
         log("command_agent", heard)
+        tryAlignRoom()
         speaker.say("One moment.")
         let id = sessionID
         Task {
@@ -788,8 +796,12 @@ final class FindModel {
             planner.hint = item.world
             text = RoomInventory.hint(item, noun: noun, cameraTransform: lastCamera) + " " + text
             log("room_hint", "\(item.name) \(item.source) \(item.seen)")
-        } else if let inventory = room.activeInventory, !inventory.items.isEmpty {
-            guessFromRoom(noun, inventory: inventory)
+        } else if let inv = room.inventory, let item = room.savedItem(for: noun), let rel = inv.relationHint(item, noun: noun) {
+            // No frame for the saved map yet: what it was on and next to still holds (Nils, 2026-11-01).
+            text = rel + " " + text
+            log("room_relation", "\(item.name): \(inv.relation(item))")
+        } else if let inventory = room.activeInventory ?? room.inventory, !inventory.items.isEmpty {
+            guessFromRoom(noun, inventory: inventory, located: room.activeInventory != nil)
         }
         scan = planner
         scanInFlight = false
@@ -798,19 +810,62 @@ final class FindModel {
         say(SpokenLine(text: text, interrupt: true))
     }
 
+    /// The saved room has no frame (ARKit did not match): Spark lists what is in view, LiDAR places it, and
+    /// 3 saved things that agree (or 2 fixed ones) give the turn and shift (`RoomInventory.alignment`). 1 Spark
+    /// call (medium), in parallel with the search, at most 2 per search and 6 per launch.
+    private func tryAlignRoom() {
+        guard room.needsAlignment, !alignInFlight, alignsThisSearch < Self.maxAlignsPerSearch,
+              alignsThisLaunch < Self.maxAlignsPerLaunch, let saved = room.inventory else { return }
+        alignInFlight = true
+        alignsThisSearch += 1
+        alignsThisLaunch += 1
+        let id = sessionID, n = alignsThisLaunch
+        Task {
+            defer { alignInFlight = false }
+            guard let s = await snapshot(),
+                  let reply = try? await MuseAgent.listObjects(jpeg: s.jpeg, label: "align_\(id)_\(n)") else {
+                log("room_align", "no answer")
+                return
+            }
+            let seen = RoomInventory.parseSparkObjects(reply).compactMap { o -> (name: String, world: SIMD3<Float>)? in
+                RoomInventory.place(portrait: o.point, depth: s.depth, intrinsics: s.intrinsics, cameraTransform: s.cameraTransform)
+                    .map { (o.name, $0) }
+            }
+            guard room.needsAlignment else { return }
+            guard let r = saved.alignment(to: seen) else {
+                log("room_align", "no match: seen " + seen.map(\.name).joined(separator: " "))
+                return
+            }
+            room.align(r.transform)
+            log("room_map_aligned", r.inliers.joined(separator: " "))
+            // A scan already running for something the map knows: turn it there now.
+            guard id == sessionID, phase == .searching, let noun = targetName, let item = room.item(for: noun) else { return }
+            scan?.hint = item.world
+            scan?.hintIsGuess = false
+            log("room_hint", "\(item.name) \(item.source) \(item.seen) (aligned)")
+            say(SpokenLine(text: RoomInventory.hint(item, noun: noun, cameraTransform: lastCamera), interrupt: false))
+        }
+    }
+
     /// The room map does not know the object (Nils, v5: "infer from nearby things, then send the user that
     /// way"): Spark picks the mapped thing it is most likely near; the scan turns there first.
-    private func guessFromRoom(_ noun: String, inventory: RoomInventory) {
+    /// `located`: the inventory is in this launch's world (directions possible); otherwise relations only.
+    private func guessFromRoom(_ noun: String, inventory: RoomInventory, located: Bool = true) {
         let id = sessionID, camera = lastCamera
         let items = Array(inventory.items.prefix(40))
         Task {
-            let pick = try? await MuseAgent.guessNear(noun: noun, items: inventory.describe(from: camera, now: Date()),
-                                                     label: "guess_\(id)")
+            let list = located ? inventory.describe(from: camera, now: Date()) : inventory.describeRelations(now: Date())
+            let pick = try? await MuseAgent.guessNear(noun: noun, items: list, label: "guess_\(id)")
             guard id == sessionID, phase == .searching, let i = pick ?? nil, items.indices.contains(i) else {
                 log("room_guess", "none")
                 return
             }
             let item = items[i]
+            guard located else {
+                log("room_guess", "\(item.name) (no frame)")
+                say(SpokenLine(text: "It might be near the \(item.name).", interrupt: false))
+                return
+            }
             scan?.hint = item.world
             scan?.hintIsGuess = true
             let o = BodyOffset(from: SIMD3(lastCamera.columns.3.x, lastCamera.columns.3.y, lastCamera.columns.3.z),
@@ -847,6 +902,7 @@ final class FindModel {
         case .scan:
             scanInFlight = true
             tones.click()
+            tryAlignRoom()  // a new view: maybe enough saved things are in it now
             let id = sessionID
             Task {
                 let result = await segment(noun, scanning: true)
@@ -1318,6 +1374,11 @@ final class FindModel {
                     return .output(#"{"not_in_view":""# + noun + #"","room_map":""# + hint
                                    + #" Call scan_for to turn the user there.","state":"# + agentState().json() + "}")
                 }
+                if let inv = room.inventory, let item = room.savedItem(for: noun), let rel = inv.relationHint(item, noun: noun) {
+                    log("agent_room_relation", "\(noun) -> \(item.name)")
+                    return .output(#"{"not_in_view":""# + noun + #"","room_map":""# + rel
+                                   + #" (no direction yet). Tell the user, then call scan_for.","state":"# + agentState().json() + "}")
+                }
                 return .output(agentState().json())
             }
         case .scanFor(let noun):
@@ -1373,9 +1434,11 @@ final class FindModel {
     }
 
     private func agentState() -> AgentState {
-        let rooms = room.activeInventory.map { inv in
-            inv.describe(from: lastCamera, now: Date()).split(separator: "\n").map(String.init)
-        } ?? []
+        // No frame for the saved map: relations only, so the agent can still say "it was on the desk".
+        let rooms = (room.activeInventory.map { $0.describe(from: lastCamera, now: Date()) }
+                     ?? room.inventory.map { "No directions yet (saved room not matched); where things were:\n"
+                                              + $0.describeRelations(now: Date()) } ?? "")
+            .split(separator: "\n").map(String.init)
         return AgentState(phase: phase.rawValue, userSaid: lastHeard, targetName: targetName,
                           candidates: candidates.map(\.info), samCallsLeft: Self.maxSAMCalls - samCalls, tracking: tracking,
                           notFound: notFound, roomItems: rooms)
@@ -1579,7 +1642,7 @@ final class FindModel {
                 for o in RoomInventory.parseSparkObjects(reply) {
                     guard let p = RoomInventory.place(portrait: o.point, depth: s.depth, intrinsics: s.intrinsics,
                                                       cameraTransform: s.cameraTransform) else { continue }
-                    mapInventory.remember(o.name, at: p, date: Date(), source: "room_scan")
+                    mapInventory.remember(o.name, at: p, date: Date(), source: "room_scan", on: o.on, fixed: o.fixed ? true : nil)
                     names.append(o.name)
                 }
                 log("map_view", "\(view): " + names.joined(separator: " "))
