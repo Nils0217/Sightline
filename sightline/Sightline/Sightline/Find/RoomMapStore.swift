@@ -5,6 +5,8 @@
 //   inventory.json    RoomInventory: object names + world positions, updated after every find
 // At launch the app tries to relocalize against the map for `relocalizeTimeout` seconds (a tap to search
 // ends it early) and falls back to a fresh session (FindModel); `active` is true only after a match.
+// Without a match, things seen later can align the map (`alignment`, 2026-11-01), and relations
+// ("on the desk, next to the laptop") work with no frame at all.
 
 import ARKit
 import Foundation
@@ -17,6 +19,9 @@ final class RoomMapStore {
     private(set) var inventory: RoomInventory?
     /// ARKit relocalized against the saved map in this launch, or a new map was just saved.
     private(set) var active = false
+    /// Saved frame -> this launch's world, from things seen now (landmark alignment, 2026-11-01), when ARKit
+    /// did not relocalize. The file keeps saved-frame positions; this only maps them in and out.
+    private(set) var alignment: simd_float4x4?
 
     static var folder: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("room_map")
@@ -45,13 +50,25 @@ final class RoomMapStore {
         try data.write(to: Self.mapURL, options: .atomic)
         self.inventory = inventory
         active = true
+        alignment = nil
         saveInventory()
     }
 
-    /// A successful find while the map is active: remember where the object is now.
+    /// The saved map has items but no frame yet: worth trying a landmark alignment.
+    var needsAlignment: Bool { !active && alignment == nil && !(inventory?.items.isEmpty ?? true) }
+
+    func align(_ t: simd_float4x4) { alignment = t }
+
+    /// This launch's world position -> the saved frame (nil when there is no frame).
+    private func toSaved(_ p: SIMD3<Float>) -> SIMD3<Float>? {
+        if active { return p }
+        return alignment.map { RoomInventory.apply($0.inverse, p) }
+    }
+
+    /// A successful find while the map has a frame: remember where the object is now.
     func remember(_ name: String, at p: SIMD3<Float>) {
-        guard active, var inv = inventory else { return }
-        inv.remember(name, at: p, date: Date(), source: "found")
+        guard let saved = toSaved(p), var inv = inventory else { return }
+        inv.remember(name, at: saved, date: Date(), source: "found")
         inventory = inv
         saveInventory()
     }
@@ -66,15 +83,22 @@ final class RoomMapStore {
 
     /// Picked up (pick-up confirmed): it is with the user now, not where it was found.
     func carried(_ name: String, from p: SIMD3<Float>?) {
-        guard active, var inv = inventory else { return }
-        inv.carried(name, from: p)
+        guard active || alignment != nil, var inv = inventory else { return }
+        inv.carried(name, from: p.flatMap(toSaved))
         inventory = inv
         saveInventory()
     }
 
-    /// Everything the map knows, when it is active (for Spark's "where might it be" guess and the agent).
-    var activeInventory: RoomInventory? { active ? inventory : nil }
+    /// Everything the map knows, in this launch's world, when it has a frame (ARKit match or landmark alignment).
+    var activeInventory: RoomInventory? {
+        if active { return inventory }
+        if let t = alignment { return inventory?.transformed(by: t) }
+        return nil
+    }
 
-    /// Hint for a noun when the map is active: the item and where it is.
-    func item(for noun: String) -> RoomItem? { active ? inventory?.match(noun) : nil }
+    /// Hint for a noun when the map has a frame: the item and where it is now.
+    func item(for noun: String) -> RoomItem? { activeInventory?.match(noun) }
+
+    /// The saved item without a frame (relations only: "on the desk, next to the laptop").
+    func savedItem(for noun: String) -> RoomItem? { inventory?.match(noun) }
 }

@@ -111,3 +111,81 @@ import Testing
         #expect(p.directionPrompt(cameraTransform: camera(yaw: 0)).hasPrefix("Point the phone lower"))
     }
 }
+
+/// Nils, 2026-11-01: ARKit never matched the saved map at launch; use relations and things seen now instead.
+@Suite struct RoomRelationTests {
+    let t0 = Date(timeIntervalSince1970: 1_793_000_000)
+
+    func room() -> RoomInventory {
+        var inv = RoomInventory(created: t0)
+        inv.remember("desk", at: [0, 0.75, -1], date: t0, source: "room_scan", fixed: true)
+        inv.remember("laptop", at: [0.3, 0.8, -1], date: t0, source: "room_scan", on: "desk")
+        inv.remember("tumbler", at: [0.1, 0.85, -1.1], date: t0, source: "room_scan", on: "desk")
+        inv.remember("lamp", at: [-0.6, 1.1, -1.2], date: t0, source: "room_scan", fixed: true)
+        inv.remember("shelf", at: [1.5, 1.0, 0.5], date: t0, source: "room_scan", fixed: true)
+        inv.remember("cup", at: [1.4, 1.2, 0.4], date: t0, source: "room_scan", on: "shelf")
+        return inv
+    }
+
+    @Test func relationNamesTheSurfaceAndNearestThings() {
+        let inv = room()
+        let tumbler = inv.match("tumbler")!
+        #expect(inv.relation(tumbler) == "on the desk, next to the laptop and the lamp")
+        #expect(inv.relationHint(tumbler, noun: "tumbler") == "Your tumbler was on the desk, next to the laptop and the lamp.")
+        #expect(inv.describeRelations(now: t0.addingTimeInterval(7200)).contains("2. tumbler: on the desk"))
+    }
+
+    @Test func savedRelationsSurviveOldFiles() throws {
+        // inventory.json written before 2026-11-01 has no "on" / "fixed".
+        let json = #"{"created":"2026-11-01T23:00:25Z","items":[{"name":"laptop","position":[0.27,0.07,-0.05],"seen":"2026-11-01T23:00:55Z","source":"room_scan"}]}"#
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .iso8601
+        let inv = try d.decode(RoomInventory.self, from: Data(json.utf8))
+        #expect(inv.items[0].on == nil && inv.items[0].fixed == nil)
+    }
+
+    func moved(_ inv: RoomInventory, degrees: Float, shift: SIMD3<Float>) -> [(name: String, world: SIMD3<Float>)] {
+        let a = degrees * .pi / 180, c = cos(a), s = sin(a)
+        return inv.items.map { i in
+            let p = i.world
+            return (i.name, SIMD3(c * p.x - s * p.z, p.y, s * p.x + c * p.z) + shift)
+        }
+    }
+
+    @Test func recoversTheTurnAndShift() throws {
+        let inv = room()
+        var seen = moved(inv, degrees: 70, shift: [0.4, -0.1, 2])
+        seen.removeAll { $0.name == "shelf" || $0.name == "cup" }
+        let r = try #require(inv.alignment(to: seen))
+        #expect(r.inliers.count == 4)
+        let shelfNow = moved(inv, degrees: 70, shift: [0.4, -0.1, 2]).first { $0.name == "shelf" }!.world
+        #expect(simd_distance(RoomInventory.apply(r.transform, inv.match("shelf")!.world), shelfNow) < 0.01)
+    }
+
+    @Test func aMovedCupIsLeftOut() throws {
+        let inv = room()
+        var seen = moved(inv, degrees: -30, shift: [1, 0, 0])
+        if let i = seen.firstIndex(where: { $0.name == "tumbler" }) { seen[i].world += SIMD3(0.6, 0, 0.4) }
+        let r = try #require(inv.alignment(to: seen))
+        #expect(!r.inliers.contains("tumbler"))
+        #expect(r.inliers.count >= 4)
+    }
+
+    @Test func twoMovableThingsAreNotEnough() {
+        let inv = room()
+        let seen = moved(inv, degrees: 20, shift: [0, 0, 0]).filter { $0.name == "laptop" || $0.name == "cup" }
+        #expect(inv.alignment(to: seen) == nil)
+    }
+
+    @Test func twoFixedThingsAreEnough() {
+        let inv = room()
+        let seen = moved(inv, degrees: 20, shift: [0, 0, 1]).filter { $0.name == "lamp" || $0.name == "shelf" }
+        #expect(inv.alignment(to: seen) != nil)
+    }
+
+    @Test func parsesSurfaceAndFixed() {
+        let o = RoomInventory.parseSparkObjects(#"{"objects":[{"name":"Desk","x":0.5,"y":0.7,"fixed":true},{"name":"mug","x":0.4,"y":0.5,"on":"desk"}]}"#)
+        #expect(o.map(\.fixed) == [true, false])
+        #expect(o[1].on == "desk" && o[0].on == nil)
+    }
+}
