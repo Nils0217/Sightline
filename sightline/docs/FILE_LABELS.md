@@ -71,7 +71,7 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `Packages/SightlineCore/Sources/SightlineSim/Replay.swift` | testing, needs-review | `SightlineSim replay <folder>`: object model + grasp check on a device recording (read-only) |
 | `Packages/SightlineCore/Sources/SightlineSim/` | testing, needs-review, important | Mac simulator of the guidance loop: `swift run SightlineSim` (stdout only, writes no files) |
 | `Sightline/Sightline.xcodeproj` | production, config | Xcode project |
-| `Sightline/Sightline/SightlineApp.swift` | production | App entry |
+| `Sightline/Sightline/SightlineApp.swift` | production, needs-review | App entry; keeps the screen awake while the app is active (2026-11-02) |
 | `Sightline/Sightline/ContentView.swift` | production, needs-review | Root screen; Find + G1/G2/G3 tabs |
 | `Sightline/Sightline/Find/` | production, needs-review, important | Find-and-grab session: command → SAM lock → hand guidance |
 | `Sightline/Sightline/Find/BurstRecorder.swift` | testing, needs-review, important | v9.1 burst recording around each hold check (2 s before + 2 s after, 10 Hz; ≤ 5 per search, ≤ 30 per launch) for tuning thresholds |
@@ -82,6 +82,7 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `Sightline/Sightline/AR/` | production, needs-review, important | ARKit frame pipeline |
 | `Sightline/Sightline/Hand/` | production, needs-review | Vision hand pose |
 | `Sightline/Sightline/AR/HandKeypointLocator.swift` | production, needs-review, important | Six-point hand in world space (Vision joints + LiDAR) for Find |
+| `Sightline/Sightline/Find/SAMNames.swift` | production, needs-review | Spark's names SAM can look for, per word, kept in `Documents/sam_names.json` (one line per word ever asked) |
 | `Sightline/Sightline/Find/RoomMapStore.swift` | production, needs-review, important | Saves and loads `Documents/room_map/` (ARWorldMap + inventory.json, overwritten per room scan) |
 | `Sightline/Sightline/Audio/AudioSessionKeeper.swift` | production, needs-review | Shared audio session: loudspeaker, re-apply after listen, interruptions and route changes, logged |
 | `Sightline/Sightline/Audio/Haptics.swift` | production, needs-review | Haptic cues for taps, reset, success, warning |
