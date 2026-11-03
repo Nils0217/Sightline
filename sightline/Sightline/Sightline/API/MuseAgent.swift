@@ -130,6 +130,18 @@ nonisolated enum MuseAgent {
         return AgentText.firstInteger(text)
     }
 
+    /// What to ask SAM for when the user's word is not a thing it can see (2026-11-02: "vitamin" found nothing,
+    /// "vitamin bottle" would have). Text only, effort minimal; the answer is cached on the phone (SAMNames).
+    static func samNames(noun: String, label: String) async throws -> [String] {
+        let text = try await reply("A blind user asked a camera app to find their \"\(noun)\". The app finds things with "
+                                   + "an image segmentation model that only understands short names of things you can see "
+                                   + "(\"pill bottle\", \"water bottle\", \"phone\"). Give up to 3 such names for what it "
+                                   + "most likely looks like at home, best first. If \"\(noun)\" is already such a name, give "
+                                   + "it first unchanged. Answer only with JSON: {\"names\":[\"pill bottle\",\"supplement jar\"]}",
+                                   noun: noun, images: [], effort: .minimal, label: label)
+        return VisualNames.parse(text)
+    }
+
     /// Room scan: the objects a blind user might ask for in this photo, as
     /// `{"objects":[{"name":..,"x":..,"y":..}]}` (RoomInventory.parseSparkObjects).
     static func listObjects(jpeg: Data, label: String) async throws -> String {
@@ -141,8 +153,10 @@ nonisolated enum MuseAgent {
                         + "lamp, bed, sofa, sink, fridge, TV, door) with \"fixed\": true. Skip walls and anything you "
                         + "are unsure about. For each, give a short common name and the centre of it in the photo as x and y "
                         + "from 0 to 1 (x left to right, y top to bottom); for a movable object also what it stands on "
-                        + "(\"on\": \"desk\") when you can see it. Answer only with JSON: "
-                        + #"{"objects":[{"name":"cup","x":0.42,"y":0.61,"on":"desk"},{"name":"desk","x":0.5,"y":0.8,"fixed":true}]}"#,
+                        + "(\"on\": \"desk\") when you can see it, and up to 4 other words the user might say for it "
+                        + "(\"aliases\": a vitamin bottle is also \"vitamins\", \"supplements\"). Answer only with JSON: "
+                        + #"{"objects":[{"name":"cup","x":0.42,"y":0.61,"on":"desk","aliases":["mug","coffee"]},"#
+                        + #"{"name":"desk","x":0.5,"y":0.8,"fixed":true}]}"#,
                         noun: "room_scan", images: [jpeg], effort: .medium, label: label)
     }
 

@@ -20,6 +20,11 @@ public struct ObjectModel: Sendable {
     /// World y of the supporting surface; nil when it could not be measured.
     public let supportHeight: Float?
     public let isFlat: Bool
+    /// Where the lock camera was. LiDAR saw only the side facing it; the rest of the object is behind (v9.4).
+    public var viewFrom: SIMD3<Float>?
+    /// How deep the unseen part reaches behind the visible surface (m): the photo box width at the object's
+    /// distance (the LiDAR shape is narrower: 3 cm for a 6.5 cm bottle in v9.4). nil = the shape's own width.
+    public var hiddenDepth: Float?
 
     public static let maxPoints = 400
     public static let flatBelow: Float = 0.035
@@ -65,7 +70,28 @@ public struct ObjectModel: Sendable {
 
     /// Same shape moved (re-lock found it a little elsewhere).
     public func moved(by d: SIMD3<Float>) -> ObjectModel {
-        ObjectModel(points: points.map { $0 + d }, supportHeight: supportHeight.map { $0 + d.y }, isFlat: isFlat)
+        var o = ObjectModel(points: points.map { $0 + d }, supportHeight: supportHeight.map { $0 + d.y }, isFlat: isFlat)
+        o.viewFrom = viewFrom.map { $0 + d }
+        o.hiddenDepth = hiddenDepth
+        return o
+    }
+
+    /// `p` is within `margin` of the object's unseen back: behind a visible point as seen from the lock camera,
+    /// at most `hiddenDepth` deep. Flat objects have no back worth the name.
+    public func isHiddenPart(_ p: SIMD3<Float>, margin: Float) -> Bool {
+        guard !isFlat, let eye = viewFrom else { return false }
+        let depth = max(hiddenDepth ?? 0, size.x, size.z)
+        let m2 = margin * margin
+        for q in points {
+            var dir = q - eye
+            dir.y = 0
+            let len = simd_length(dir)
+            guard len > 1e-3 else { continue }
+            dir /= len
+            let s = min(max(simd_dot(p - q, dir), 0), depth)
+            if simd_distance_squared(q + dir * s, p) <= m2 { return true }
+        }
+        return false
     }
 
     // MARK: Build
@@ -132,7 +158,9 @@ public struct ObjectModel: Sendable {
             }
         }
         guard !lidar.isEmpty else { return nil }
-        return ObjectModel(points: thin(lidar), supportHeight: support, isFlat: false)
+        var solid = ObjectModel(points: thin(lidar), supportHeight: support, isFlat: false)
+        solid.viewFrom = origin
+        return solid
     }
 
     /// The ring of LiDAR points around the mask is a wall, door or cabinet front rather than a table:
@@ -258,7 +286,8 @@ public struct ObstacleMap: Sendable {
             flat.y = 0
             var fromBody = w - camera
             fromBody.y = 0
-            guard simd_length(flat) < 0.6, simd_length(fromBody) > body, object.distanceToSurface(w) > nearObject else { continue }
+            guard simd_length(flat) < 0.6, simd_length(fromBody) > body, object.distanceToSurface(w) > nearObject,
+                  !object.isHiddenPart(w, margin: nearObject) else { continue }
             if let support = object.supportHeight {
                 let h = w.y - support
                 guard h > 0.03, h < 0.5 else { continue }

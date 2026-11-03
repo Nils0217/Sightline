@@ -183,6 +183,128 @@ import Testing
         #expect(inv.alignment(to: seen) != nil)
     }
 
+    @Test func twoFixedThingsBeatTwoMovableOnes() throws {
+        // Review 2026-11-01: a movable pair with a smaller error used to win the tie and then be rejected.
+        let inv = room()
+        var seen = moved(inv, degrees: 20, shift: [0, 0, 1]).filter { ["lamp", "shelf", "laptop", "cup"].contains($0.name) }
+        for i in seen.indices {
+            if seen[i].name == "laptop" || seen[i].name == "cup" { seen[i].world += SIMD3(1.5, 0, 0) }  // both moved together
+            if seen[i].name == "lamp" { seen[i].world += SIMD3(0.05, 0, 0) }                           // depth noise
+        }
+        let r = try #require(inv.alignment(to: seen))
+        #expect(Set(r.inliers) == ["lamp", "shelf"])
+    }
+
+    @Test func namesNeedNotMatchExactly() throws {
+        // Spark names the same thing differently per photo ("lamp" in the scan, "desk lamp" now).
+        let inv = room()
+        let rename = ["lamp": "desk lamp", "tumbler": "steel tumbler", "laptop": "laptop computer"]
+        let seen = moved(inv, degrees: 45, shift: [0.2, 0, -0.5]).filter { rename[$0.name] != nil }.map { (rename[$0.name]!, $0.world) }
+        let r = try #require(inv.alignment(to: seen))
+        #expect(Set(r.inliers) == ["lamp", "tumbler", "laptop"])
+    }
+
+    @Test func searchesForTheSavedNameWhenItSaysMore() {
+        var inv = room()
+        inv.remember("vitamin bottle", at: [0.6, 0.8, 0.1], date: t0, source: "room_scan", on: "desk")
+        #expect(inv.searchName(for: "vitamin") == "vitamin bottle")
+        #expect(inv.searchName(for: "cup") == "cup")          // same words: unchanged
+        #expect(inv.searchName(for: "keys") == "keys")        // not in the map
+        #expect(inv.searchName(for: "red cup") == "red cup")  // the user said more than the map
+    }
+
+    @Test func aliasesFromTheScanFindTheSavedName() {
+        var inv = room()
+        inv.remember("vitamin bottle", at: [0.6, 0.8, 0.1], date: t0, source: "room_scan", on: "desk",
+                     aliases: ["vitamins", "supplements"])
+        #expect(inv.searchName(for: "supplements") == "vitamin bottle")
+        #expect(inv.match("my supplements")?.name == "vitamin bottle")
+        // Seen again without aliases: they are kept.
+        inv.remember("vitamin bottle", at: [0.62, 0.8, 0.1], date: t0, source: "seen")
+        #expect(inv.match("supplements")?.aliases == ["supplements", "vitamins"])
+        let o = RoomInventory.parseSparkObjects(#"{"objects":[{"name":"Vitamin bottle","x":0.5,"y":0.5,"aliases":["Vitamins","vitamin bottle",""]}]}"#)
+        #expect(o[0].aliases == ["vitamins"])
+    }
+
+    @Test func aMapPointLandsOnThePhotoWhereItIs() throws {
+        // Raw 1920x1440 landscape; portrait photo = raw turned 90° clockwise.
+        let k = CameraIntrinsics(fx: 1400, fy: 1400, cx: 960, cy: 720, imageSize: [1920, 1440])
+        let t = matrix_identity_float4x4
+        let ahead = try #require(RoomInventory.portraitPoint(world: [0, 0, -1], intrinsics: k, cameraTransform: t))
+        #expect(simd_distance(ahead, [0.5, 0.5]) < 0.01)
+        // Round trip with place(): a world point -> photo -> back on a flat depth of 1 m.
+        let w = SIMD3<Float>(0.2, -0.1, -1)
+        let p = try #require(RoomInventory.portraitPoint(world: w, intrinsics: k, cameraTransform: t))
+        let depth = DepthImage(width: 256, height: 192, depth: Array(repeating: 1, count: 256 * 192),
+                               confidence: Array(repeating: 2, count: 256 * 192))
+        let back = try #require(RoomInventory.place(portrait: p, depth: depth, intrinsics: k, cameraTransform: t))
+        #expect(simd_distance(back, w) < 0.03)
+        #expect(RoomInventory.portraitPoint(world: [0, 0, 1], intrinsics: k, cameraTransform: t) == nil)  // behind
+        let tile = SmallObjects.tile(around: [0.95, 0.5], in: [384, 512])
+        #expect(tile.origin.x + tile.size.x == 384 && tile.size == SIMD2(211, 282))
+    }
+
+    @Test func parsesSparkNamesForSAM() {
+        #expect(VisualNames.parse(#"Sure: {"names":["Pill Bottle"," supplement jar",""]}"#) == ["pill bottle", "supplement jar"])
+        #expect(VisualNames.parse("no json").isEmpty)
+    }
+
+    @Test func aWordForSeveralSavedThingsIsNotNarrowed() {
+        // Review 2026-11-02: "bottle" with a water bottle and a vitamin bottle saved must not become one of them.
+        var inv = room()
+        inv.remember("water bottle", at: [0.8, 0.8, 0], date: t0, source: "room_scan")
+        inv.remember("vitamin bottle", at: [0.6, 0.8, 0.1], date: t0, source: "room_scan")
+        #expect(inv.searchName(for: "bottle") == "bottle")
+        #expect(inv.target(for: "bottle") == nil)
+        #expect(inv.searchName(for: "vitamin") == "vitamin bottle")
+        #expect(inv.target(for: "vitamin")?.name == "vitamin bottle")
+        #expect(inv.target(for: "cup")?.name == "cup")
+    }
+
+    @Test func aMovedThingReplacesItsOldEntry() {
+        var inv = room()
+        let oldCup = inv.match("cup")!.world
+        // The cup's old spot is in view and empty; it is seen 1 m away.
+        let r = inv.refresh(with: [.init(name: "cup", world: oldCup + SIMD3(1, 0, 0))], date: t0, source: "seen",
+                            isVisible: { simd_distance($0, oldCup) < 0.01 })
+        #expect(r.removed == ["cup"] && r.added == ["cup"])
+        #expect(inv.items.filter { $0.name == "cup" }.count == 1)
+        #expect(simd_distance(inv.match("cup")!.world, oldCup + SIMD3(1, 0, 0)) < 0.01)
+    }
+
+    /// v9.4: the room scan called a shaker "water bottle"; SAM never saw one at its spot. Forget that entry only.
+    @Test func aThingNotAtItsSpotIsForgotten() {
+        var inv = room()
+        let cup = inv.match("cup")!.world
+        inv.remember("cup", at: cup + SIMD3(2, 0, 0), date: t0, source: "found")
+        let before = inv.items.count
+        inv.forget("cup", near: cup)
+        #expect(inv.items.count == before - 1)
+        #expect(simd_distance(inv.match("cup")!.world, cup + SIMD3(2, 0, 0)) < 0.01)
+    }
+
+    @Test func aThingOutOfViewOrHiddenIsKept() {
+        var inv = room()
+        let oldCup = inv.match("cup")!.world
+        // Old spot not visible (out of the photo, or something in front): a second cup, both stay.
+        let r = inv.refresh(with: [.init(name: "cup", world: oldCup + SIMD3(1, 0, 0))], date: t0, source: "seen",
+                            isVisible: { _ in false })
+        #expect(r.removed.isEmpty)
+        #expect(inv.items.filter { $0.name == "cup" }.count == 2)
+        // Seen where it was: updated, not added.
+        let again = inv.refresh(with: [.init(name: "laptop", world: inv.match("laptop")!.world + SIMD3(0.1, 0, 0))],
+                                date: t0, source: "seen", isVisible: { _ in true })
+        #expect(again.added.isEmpty && again.removed.isEmpty)
+    }
+
+    @Test func severalSavedThingsAreNamed() {
+        var inv = room()
+        inv.remember("water bottle", at: [0.8, 0.8, 0], date: t0, source: "room_scan")
+        inv.remember("vitamin bottle", at: [0.6, 0.8, 0.1], date: t0, source: "room_scan")
+        #expect(inv.fits("bottle") == ["vitamin bottle", "water bottle"])
+        #expect(inv.fits("vitamin") == ["vitamin bottle"])
+    }
+
     @Test func parsesSurfaceAndFixed() {
         let o = RoomInventory.parseSparkObjects(#"{"objects":[{"name":"Desk","x":0.5,"y":0.7,"fixed":true},{"name":"mug","x":0.4,"y":0.5,"on":"desk"}]}"#)
         #expect(o.map(\.fixed) == [true, false])

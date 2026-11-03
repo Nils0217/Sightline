@@ -124,6 +124,50 @@ func tableScene(objectDepth: Float, glossyNoise: Bool = false) -> (DepthImage, S
     }
 
     /// Nils, 2026-11-01: the room scan stops by itself after a full circle with enough views; no tap.
+    func steadyScans(_ p: inout ScanPlanner, _ t: inout Double, _ pose: simd_float4x4) -> Int {
+        var n = 0
+        for _ in 0..<60 {
+            t += 1.0 / 30
+            if p.update(time: t, cameraTransform: pose, busy: false, speaking: true) == .scan { n += 1 }
+        }
+        return n
+    }
+
+    @Test func aDirectionIsNewAgainAfterWalking() {
+        // Nils, 2026-11-02: a thing hidden behind a bigger one shows up from somewhere else.
+        var p = ScanPlanner(time: 0)
+        var t = 0.0
+        var pose = camera(yawDegrees: 0)
+        #expect(steadyScans(&p, &t, pose) == 1)
+        #expect(steadyScans(&p, &t, pose) == 0)          // same place, same direction
+        pose.columns.3 = SIMD4(0.4, 0, 0, 1)
+        #expect(steadyScans(&p, &t, pose) == 0)          // 40 cm: still the same view
+        pose.columns.3 = SIMD4(1.2, 0, 0, 1)
+        #expect(steadyScans(&p, &t, pose) == 1)          // 1.2 m away: look again
+        #expect(p.directionPrompt(cameraTransform: pose).contains("haven't looked"))
+    }
+
+    /// v9.4 device run (2026-11-03): the water bottle and the sunglasses were saved on a mantel above the chest
+    /// phone. Facing it, the view was already searched, so no SAM call was made, and "Hold still. Looking there
+    /// now." was said 3 times before giving up (24 s, nothing looked at).
+    @Test func aSavedSpotAboveTheViewIsNotAWait() {
+        func pose(pitchDegrees: Float) -> simd_float4x4 {
+            simd_float4x4(simd_quatf(angle: pitchDegrees * .pi / 180, axis: SIMD3(1, 0, 0)))
+        }
+        // Chest phone tilted down 20°; the saved spot 1 m ahead, 45° up: out of view.
+        var p = ScanPlanner(time: 0)
+        p.markSearched(cameraTransform: pose(pitchDegrees: -20))
+        p.hint = SIMD3(0, 1, -1)
+        #expect(p.directionPrompt(cameraTransform: pose(pitchDegrees: -20)) == "Point the phone a little higher.")
+        // 15° below the spot (in view), 20° from a searched view: look at it now.
+        var q = ScanPlanner(time: 0)
+        q.markSearched(cameraTransform: pose(pitchDegrees: 10))
+        q.hint = SIMD3(0, 1, -1)
+        var t = 0.0
+        #expect(steadyScans(&q, &t, pose(pitchDegrees: 30)) == 1)
+        #expect(steadyScans(&q, &t, pose(pitchDegrees: 30)) == 0)  // the spot counts as looked at
+    }
+
     @Test func roomScanEndsAfterAFullCircle() {
         var p = ScanPlanner(time: 0)
         p.budget = 12
@@ -170,6 +214,31 @@ func tableScene(objectDepth: Float, glossyNoise: Bool = false) -> (DepthImage, S
                                  supportHeight: 0, isFlat: true)
         #expect(napkin.fitsBox(0.12))
         #expect(napkin.fitsBox(0.22))
+    }
+}
+
+@Suite struct HiddenBackTests {
+    /// v9.4 device run (2026-11-03, Nils: "it doesn't identify the object entirely"): the lock saw only the front of
+    /// a 6.5 cm vitamin bottle; the rolling scan saw its side and back from where the hand was, more than 4 cm from that
+    /// front, and said "Something is ahead / on your right" about the bottle itself.
+    @Test func theBackOfTheTargetIsNotAnObstacle() {
+        // Front face 40 cm ahead of the lock camera, 6 cm wide, 10 cm tall, on a table at y = -0.06.
+        var front: [SIMD3<Float>] = []
+        for x in stride(from: Float(-0.03), through: 0.03, by: 0.01) {
+            for y in stride(from: Float(-0.05), through: 0.04, by: 0.01) { front.append(SIMD3(x, y, -0.40)) }
+        }
+        var bottle = ObjectModel(points: front, supportHeight: -0.06, isFlat: false)
+        bottle.viewFrom = .zero
+        bottle.hiddenDepth = 0.065
+        func blob(_ p: SIMD3<Float>) -> [SIMD3<Float>] {
+            [-0.03, 0, 0.03].flatMap { dx in [0, 0.03].map { dy in p + SIMD3(dx, dy, 0) } }
+        }
+        let back = blob(SIMD3(0, 0, -0.455))          // its back, 5.5 cm behind the front
+        let beside = blob(SIMD3(0.12, 0, -0.42))      // another bottle 6 cm to its right
+        let camera = SIMD3<Float>(0.05, 0.1, 0)        // the user moved a little
+        let map = ObstacleMap.scene(back + beside, object: bottle, camera: camera)!
+        #expect(!map.points.contains { $0.z < -0.44 && abs($0.x) < 0.04 })
+        #expect(map.points.contains { $0.x > 0.08 })
     }
 }
 

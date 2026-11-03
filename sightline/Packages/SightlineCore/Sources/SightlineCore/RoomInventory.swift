@@ -13,20 +13,25 @@ public struct RoomItem: Codable, Sendable, Equatable {
     public var name: String
     public var position: [Float]
     public var seen: Date
-    /// "room_scan" or "found".
+    /// "room_scan", "found" or "seen" (listed by Spark in a later view, 2026-11-02).
     public var source: String
     /// What it stands on, as Spark named it in the room scan ("desk", "shelf"); nil when unknown.
     public var on: String?
     /// Furniture or a big thing that does not move (desk, shelf, lamp): a landmark for aligning the map.
     public var fixed: Bool?
+    /// Other words the user might say for it, from the room scan ("vitamin bottle": "vitamins", "supplements");
+    /// matched on the phone, so no model call is needed at search time (2026-11-02).
+    public var aliases: [String]?
 
-    public init(name: String, position: SIMD3<Float>, seen: Date, source: String, on: String? = nil, fixed: Bool? = nil) {
+    public init(name: String, position: SIMD3<Float>, seen: Date, source: String, on: String? = nil, fixed: Bool? = nil,
+                aliases: [String]? = nil) {
         self.name = name
         self.position = [position.x, position.y, position.z]
         self.seen = seen
         self.source = source
         self.on = on
         self.fixed = fixed
+        self.aliases = aliases
     }
 
     public var world: SIMD3<Float> { SIMD3(position[0], position[1], position[2]) }
@@ -43,26 +48,110 @@ public struct RoomInventory: Codable, Sendable, Equatable {
     public func match(_ noun: String) -> RoomItem? {
         let want = Self.words(noun)
         guard !want.isEmpty else { return nil }
-        let hits = items.filter { !Self.words($0.name).isDisjoint(with: want) }
+        // Same name first, then an alias said exactly ("supplements"), then a shared word.
+        func score(_ i: RoomItem) -> Int { Self.words(i.name) == want ? 2 : Self.aliasHit(i, want) ? 1 : 0 }
+        let hits = items.filter { !Self.words($0.name).isDisjoint(with: want) || Self.aliasHit($0, want) }
         return hits.max { a, b in
-            let sa = Self.words(a.name) == want ? 1 : 0, sb = Self.words(b.name) == want ? 1 : 0
+            let sa = score(a), sb = score(b)
             if sa != sb { return sa < sb }
             if (a.source == "found") != (b.source == "found") { return b.source == "found" }
             return a.seen < b.seen
         }
     }
 
+    /// The name to ask SAM for (device test 2026-11-02: "vitamin" found nothing in 17 views, with the Nature Made
+    /// jar in plain sight; the room scan had it as "vitamin bottle"). The saved name when it is the user's word plus
+    /// more ("vitamin" -> "vitamin bottle"); otherwise the user's word.
+    /// When the word fits several saved things ("bottle": a water bottle and a vitamin bottle), it stays as said.
+    public func searchName(for noun: String) -> String {
+        guard let item = target(for: noun), Self.words(item.name) != Self.words(noun) else { return noun }
+        return item.name
+    }
+
+    /// The one saved thing the word means: same name, else the only saved name that is the word plus more or has it
+    /// as an alias. nil when unknown or when it fits several different things (review 2026-11-02).
+    public func target(for noun: String) -> RoomItem? {
+        let want = Self.words(noun)
+        guard !want.isEmpty else { return nil }
+        if items.contains(where: { Self.words($0.name) == want }) { return match(noun) }
+        let fits = items.filter { Self.words($0.name).isStrictSuperset(of: want) || Self.aliasHit($0, want) }
+        guard Set(fits.map { Self.words($0.name) }).count == 1 else { return nil }
+        return fits.max { a, b in
+            if (a.source == "found") != (b.source == "found") { return b.source == "found" }
+            return a.seen < b.seen
+        }
+    }
+
+    /// The different saved names the word fits (same name, the word plus more, or an alias), sorted. More than one:
+    /// say them instead of picking one ("bottle": "vitamin bottle", "water bottle").
+    public func fits(_ noun: String) -> [String] {
+        let want = Self.words(noun)
+        guard !want.isEmpty else { return [] }
+        var seen: Set<Set<String>> = [], out: [String] = []
+        for item in items where Self.words(item.name) == want || Self.words(item.name).isStrictSuperset(of: want)
+            || Self.aliasHit(item, want) {
+            if seen.insert(Self.words(item.name)).inserted { out.append(item.name) }
+        }
+        return out.sorted()
+    }
+
+    /// One thing in a listing of a view, placed by LiDAR (same frame as `items`).
+    public struct Sighting: Sendable {
+        public var name: String
+        public var world: SIMD3<Float>
+        public var on: String?
+        public var aliases: [String]?
+        public init(name: String, world: SIMD3<Float>, on: String? = nil, aliases: [String]? = nil) {
+            self.name = name; self.world = world; self.on = on; self.aliases = aliases
+        }
+    }
+
+    /// Rolling update from one listed view (Nils, 2026-11-02): a saved thing whose spot is in this view
+    /// (`isVisible`: in the photo, nothing in front of it) but was not seen there, while a thing of that name was
+    /// seen elsewhere, has moved: the old entry goes. Saved things out of view stay (a second cup in another room
+    /// corner). Then every sighting is remembered (same name within 50 cm = the same thing).
+    @discardableResult
+    public mutating func refresh(with sightings: [Sighting], date: Date, source: String,
+                                 isVisible: (SIMD3<Float>) -> Bool) -> (added: [String], removed: [String]) {
+        let keys = Set(sightings.map { Self.words($0.name) })
+        var removed: [String] = []
+        items.removeAll { item in
+            let k = Self.words(item.name)
+            guard keys.contains(k), item.fixed != true else { return false }
+            let stillThere = sightings.contains { Self.words($0.name) == k && simd_distance($0.world, item.world) < 0.5 }
+            guard !stillThere, isVisible(item.world) else { return false }
+            removed.append(item.name)
+            return true
+        }
+        var added: [String] = []
+        for s in sightings {
+            let k = Self.words(s.name)
+            if !items.contains(where: { Self.words($0.name) == k && simd_distance($0.world, s.world) < 0.5 }) { added.append(s.name) }
+            remember(s.name, at: s.world, date: date, source: source, on: s.on, aliases: s.aliases)
+        }
+        return (added, removed)
+    }
+
+    static func aliasHit(_ item: RoomItem, _ want: Set<String>) -> Bool {
+        (item.aliases ?? []).contains { Self.words($0) == want }
+    }
+
     /// Adds or moves an item. Same name within 50 cm = the same thing seen again (keeps what it stands on and
     /// whether it is fixed when the new sighting does not say).
     public mutating func remember(_ name: String, at p: SIMD3<Float>, date: Date, source: String,
-                                  on: String? = nil, fixed: Bool? = nil) {
+                                  on: String? = nil, fixed: Bool? = nil, aliases: [String]? = nil) {
         let key = Self.words(name)
         if let i = items.firstIndex(where: { Self.words($0.name) == key && simd_distance($0.world, p) < 0.5 }) {
-            items[i] = RoomItem(name: name, position: p, seen: date, source: source, on: on ?? items[i].on, fixed: fixed ?? items[i].fixed)
+            let old = items[i]
+            let merged = Array(Set((old.aliases ?? []) + (aliases ?? []))).sorted()
+            items[i] = RoomItem(name: name, position: p, seen: date, source: source, on: on ?? old.on, fixed: fixed ?? old.fixed,
+                                aliases: merged.isEmpty ? nil : merged)
         } else if source == "found", let i = items.firstIndex(where: { Self.words($0.name) == key && $0.source == "found" }) {
-            items[i] = RoomItem(name: name, position: p, seen: date, source: source, on: on, fixed: fixed)  // it moved
+            // It moved.
+            items[i] = RoomItem(name: name, position: p, seen: date, source: source, on: on, fixed: fixed,
+                                aliases: aliases ?? items[i].aliases)
         } else {
-            items.append(RoomItem(name: name, position: p, seen: date, source: source, on: on, fixed: fixed))
+            items.append(RoomItem(name: name, position: p, seen: date, source: source, on: on, fixed: fixed, aliases: aliases))
         }
     }
 
@@ -131,36 +220,42 @@ public struct RoomInventory: Codable, Sendable, Equatable {
     public static let alignTolerance: Float = 0.25
 
     public func alignment(to seen: [(name: String, world: SIMD3<Float>)]) -> (transform: simd_float4x4, inliers: [String])? {
-        // Every saved item with the same name as something seen now (duplicates allowed; RANSAC sorts them out).
-        var pairs: [(saved: RoomItem, now: SIMD3<Float>)] = []
-        for o in seen {
+        // Every saved item sharing a word with something seen now ("desk lamp" pairs with "lamp" and "desk";
+        // duplicates allowed): RANSAC sorts them out. `seen` = index of the sighting, used once per hypothesis.
+        var pairs: [(saved: RoomItem, now: SIMD3<Float>, seen: Int)] = []
+        for (n, o) in seen.enumerated() {
             let k = Self.words(o.name)
-            for item in items where Self.words(item.name) == k { pairs.append((item, o.world)) }
+            guard !k.isEmpty else { continue }
+            for item in items where !Self.words(item.name).isDisjoint(with: k) { pairs.append((item, o.world, n)) }
         }
         guard pairs.count >= 2 else { return nil }
         func xz(_ v: SIMD3<Float>) -> SIMD2<Float> { SIMD2(v.x, v.z) }
-        var best: (inliers: [Int], error: Float)?
+        // Only hypotheses that would be accepted compete (review 2026-11-01: a movable pair with a smaller error
+        // used to beat 2 fixed ones and then be rejected). More inliers, then more fixed ones, then less error.
+        var best: (inliers: [Int], fixed: Int, error: Float)?
         for i in pairs.indices {
-            for j in pairs.indices where j > i && Self.words(pairs[i].saved.name) != Self.words(pairs[j].saved.name) {
+            for j in pairs.indices where j > i && pairs[i].seen != pairs[j].seen
+                && Self.words(pairs[i].saved.name) != Self.words(pairs[j].saved.name) {
                 let s = xz(pairs[j].saved.world) - xz(pairs[i].saved.world), n = xz(pairs[j].now) - xz(pairs[i].now)
                 // A rigid move keeps the distance between two things; two near each other give no direction.
                 guard simd_length(s) >= 0.3, abs(simd_length(s) - simd_length(n)) < 0.15 else { continue }
                 let t = Self.transform(from: [pairs[i].saved.world, pairs[j].saved.world], to: [pairs[i].now, pairs[j].now])
                 var inl: [Int] = [], err: Float = 0
-                var used: Set<Set<String>> = []
+                var used: Set<Set<String>> = [], usedSeen: Set<Int> = []
                 for (k, p) in pairs.enumerated() {
                     let d = simd_distance(Self.apply(t, p.saved.world), p.now)
                     let key = Self.words(p.saved.name)
-                    if d <= Self.alignTolerance, !used.contains(key) { inl.append(k); err += d; used.insert(key) }
+                    guard d <= Self.alignTolerance, !used.contains(key), !usedSeen.contains(p.seen) else { continue }
+                    inl.append(k); err += d; used.insert(key); usedSeen.insert(p.seen)
                 }
-                if best == nil || inl.count > best!.inliers.count || (inl.count == best!.inliers.count && err < best!.error) {
-                    best = (inl, err)
-                }
+                let fixed = inl.filter { pairs[$0].saved.fixed == true }.count
+                guard inl.count >= 3 || (inl.count == 2 && fixed == 2) else { continue }
+                if let b = best, (b.inliers.count, b.fixed) > (inl.count, fixed)
+                    || ((b.inliers.count, b.fixed) == (inl.count, fixed) && b.error <= err) { continue }
+                best = (inl, fixed, err)
             }
         }
         guard let b = best else { return nil }
-        let fixedCount = b.inliers.filter { pairs[$0].saved.fixed == true }.count
-        guard b.inliers.count >= 3 || (b.inliers.count == 2 && fixedCount == 2) else { return nil }
         let t = Self.transform(from: b.inliers.map { pairs[$0].saved.world }, to: b.inliers.map { pairs[$0].now })
         return (t, b.inliers.map { pairs[$0].saved.name })
     }
@@ -212,6 +307,12 @@ public struct RoomInventory: Codable, Sendable, Equatable {
         return Array(names.sorted { (rank($0), $0) < (rank($1), $1) }.prefix(5))
     }
 
+    /// Looked for at its own spot, in clear view, twice, and not there (v9.4: the room scan called a shaker a
+    /// "water bottle" and every search steered there). Only that entry goes; others with the name stay.
+    public mutating func forget(_ name: String, near p: SIMD3<Float>) {
+        items.removeAll { $0.name == name && simd_distance($0.world, p) < 0.3 }
+    }
+
     /// The user picked the object up (v5 test: the hint then pointed at the empty spot where the keys had
     /// been lifted). It is with the user now: forget where it was, both found and room-scan entries.
     public mutating func carried(_ name: String, from p: SIMD3<Float>?) {
@@ -261,6 +362,8 @@ public struct RoomInventory: Codable, Sendable, Equatable {
         /// What it stands on ("desk"), when Spark said.
         public var on: String?
         public var fixed: Bool
+        /// Other words the user might say for it (up to 4).
+        public var aliases: [String] = []
     }
 
     /// Objects from a Muse Spark room-scan reply:
@@ -276,8 +379,10 @@ public struct RoomInventory: Codable, Sendable, Equatable {
                   let x = (o["x"] as? NSNumber)?.floatValue, let y = (o["y"] as? NSNumber)?.floatValue,
                   (0...1).contains(x), (0...1).contains(y) else { return nil }
             let on = (o["on"] as? String)?.trimmingCharacters(in: .whitespaces).lowercased()
+            let aliases = ((o["aliases"] as? [Any]) ?? []).compactMap { ($0 as? String)?.lowercased() }
+                .filter { !$0.isEmpty && $0 != name.lowercased() }
             return SparkObject(name: name.lowercased(), point: SIMD2(x, y), on: on?.isEmpty == false && on != "null" ? on : nil,
-                               fixed: (o["fixed"] as? Bool) ?? false)
+                               fixed: (o["fixed"] as? Bool) ?? false, aliases: Array(aliases.prefix(4)))
         }
     }
 
@@ -297,6 +402,17 @@ public struct RoomInventory: Codable, Sendable, Equatable {
         let k = intrinsics.scaled(to: size)
         return DepthProjector.world(fromCamera: DepthProjector.unproject(pixel: pixel, depth: d.depth, intrinsics: k),
                                     cameraTransform: t)
+    }
+
+    /// A world point on the portrait photo (0...1, origin top-left; inverse of `place`), nil when behind the
+    /// camera or outside the photo. For cutting the photo around where the map says the object is (2026-11-02).
+    public static func portraitPoint(world w: SIMD3<Float>, intrinsics k: CameraIntrinsics,
+                                     cameraTransform t: simd_float4x4) -> SIMD2<Float>? {
+        guard let q = DepthProjector.rawPixel(fromWorld: w, cameraTransform: t, intrinsics: k) else { return nil }
+        let raw = q / k.imageSize
+        let p = SIMD2(1 - raw.y, raw.x)
+        guard (0...1).contains(p.x), (0...1).contains(p.y) else { return nil }
+        return p
     }
 
     static let stopWords: Set<String> = ["my", "the", "a", "an", "of", "some", "pair"]
@@ -321,6 +437,17 @@ extension SAMRecord {
     }
 }
 
+/// Spark's names SAM can look for (`{"names":["pill bottle","supplement jar"]}`), lowercased, at most 3.
+public enum VisualNames {
+    public static func parse(_ text: String) -> [String] {
+        guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"), start < end,
+              let json = try? JSONSerialization.jsonObject(with: Data(text[start...end].utf8)) as? [String: Any],
+              let names = json["names"] as? [Any] else { return [] }
+        let clean = names.compactMap { ($0 as? String)?.lowercased().trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return Array(clean.prefix(3))
+    }
+}
+
 /// Small things SAM misses at 512 px across a room (2026-10-29: keys were 12x16 px).
 public enum SmallObjects {
     static let nouns: Set<String> = ["key", "ring", "earring", "coin", "pill", "battery", "airpod", "earbud",
@@ -334,6 +461,14 @@ public enum SmallObjects {
         let w = Int((Float(size.x) * 0.55).rounded()), h = Int((Float(size.y) * 0.55).rounded())
         let xs = [0, size.x - w], ys = [0, size.y - h]
         return ys.flatMap { y in xs.map { x in (SIMD2(x, y), SIMD2(w, h)) } }
+    }
+
+    /// One tile the size of `tiles` centred on `p` (portrait, 0...1), kept inside the image: SAM looks only
+    /// where the room map says the object is (one call instead of 4 tiles for a small thing, 2026-11-02).
+    public static func tile(around p: SIMD2<Float>, in size: SIMD2<Int>) -> (origin: SIMD2<Int>, size: SIMD2<Int>) {
+        let w = Int((Float(size.x) * 0.55).rounded()), h = Int((Float(size.y) * 0.55).rounded())
+        let x = Int((p.x * Float(size.x)).rounded()) - w / 2, y = Int((p.y * Float(size.y)).rounded()) - h / 2
+        return (SIMD2(min(max(0, x), size.x - w), min(max(0, y), size.y - h)), SIMD2(w, h))
     }
 
     /// Recorded `sam.txt` of a tiled call: the tiles' SAM outputs joined by this line.

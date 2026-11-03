@@ -23,6 +23,11 @@ public struct ScanPlanner: Sendable {
     private var idlePrompts = 0
 
     public private(set) var scanned: [SIMD3<Float>] = []
+    /// Where the camera was for each of `scanned` (Nils, 2026-11-02: a thing hidden behind a bigger one shows up
+    /// once the user walks somewhere else; a direction searched from there is not searched from here).
+    public private(set) var scannedFrom: [SIMD3<Float>] = []
+    /// Moved this far (metres) from where a direction was searched: that direction counts as new again.
+    public var moveAgain: Float = 0.75
     public private(set) var used = 0
     private var lastDirection: SIMD3<Float>?
     private var lastTime: Double?
@@ -46,7 +51,15 @@ public struct ScanPlanner: Sendable {
     public var sectorsCovered: Int { Set(scanned.map { Self.sector($0) }).count }
 
     /// The view at lock time already failed: count it as searched without spending budget.
-    public mutating func markSearched(cameraTransform t: simd_float4x4) { scanned.append(Self.direction(t)) }
+    public mutating func markSearched(cameraTransform t: simd_float4x4) {
+        scanned.append(Self.direction(t))
+        scannedFrom.append(Self.position(t))
+    }
+
+    /// Directions searched from near `camera` (within `moveAgain`).
+    func scannedHere(_ camera: SIMD3<Float>) -> [SIMD3<Float>] {
+        zip(scanned, scannedFrom).filter { simd_distance($0.1, camera) < moveAgain }.map(\.0)
+    }
 
     public enum Step: Equatable, Sendable { case wait, scan, prompt, giveUp }
 
@@ -61,12 +74,23 @@ public struct ScanPlanner: Sendable {
         }
         if exhausted && !busy { return .giveUp }
         let steady = steadySince.map { time - $0 >= steadyFor } ?? false
-        let isNew = scanned.allSatisfy { Self.angle($0, dir) >= minNewAngle }
+        let camera = Self.position(t)
+        let here = scannedHere(camera)
+        // The saved spot is in this view but was never looked at from here (v9.4: facing a mantel above the
+        // chest phone, the view counted as searched and nothing was sent for 24 s): this view is new too.
+        let toHint = hint.map { simd_normalize($0 - camera) }
+        let hintInView = toHint.map { h in Self.angle(h, dir) < minNewAngle && here.allSatisfy { Self.angle($0, h) >= minNewAngle } } ?? false
+        let isNew = here.allSatisfy { Self.angle($0, dir) >= minNewAngle } || hintInView
         if !busy, steady, isNew, time - lastScan >= minGap {
             lastScan = time
             used += 1
             idlePrompts = 0
             scanned.append(dir)
+            scannedFrom.append(camera)
+            if hintInView, let toHint {
+                scanned.append(toHint)
+                scannedFrom.append(camera)
+            }
             return .scan
         }
         if !speaking, !busy, time - lastPrompt >= promptEvery {
@@ -115,13 +139,20 @@ public struct ScanPlanner: Sendable {
     public func directionPrompt(cameraTransform t: simd_float4x4) -> String {
         let dir = Self.direction(t)
         let yaw = Self.yaw(dir)
-        let searched = Set(scanned.map { Self.sector($0) })
+        let camera = Self.position(t)
+        let here = scannedHere(camera)
+        let searched = Set(here.map { Self.sector($0) })
         if let hint {
-            let camera = SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z)
             let toHint = simd_normalize(hint - camera)
-            if scanned.allSatisfy({ Self.angle($0, toHint) >= minNewAngle }) {
+            if here.allSatisfy({ Self.angle($0, toHint) >= minNewAngle }) {
                 let d = Self.wrap(Self.yaw(toHint) - yaw)
-                if abs(d) < minNewAngle { return toHint.y < dir.y - 0.3 ? "Point the phone a little lower." : "Hold still. Looking there now." }
+                if abs(d) < minNewAngle {
+                    // Facing it but above or below the view (v9.4: a mantel above the chest phone).
+                    if Self.angle(toHint, dir) >= minNewAngle {
+                        return toHint.y > dir.y ? "Point the phone a little higher." : "Point the phone a little lower."
+                    }
+                    return "Hold still. Looking there now."
+                }
                 // v5 test: "turn left" alone gave no idea how far; "behind you" needs half a turn.
                 return "Turn \(Self.turn(d)), toward \(hintIsGuess ? "where it might be" : "where I last saw it")."
             }
@@ -137,7 +168,7 @@ public struct ScanPlanner: Sendable {
             return d > 0 ? "Turn right slowly. I haven't looked there yet." : "Turn left slowly. I haven't looked there yet."
         }
         // All round at this height: look lower (floors, low shelves) if not done yet.
-        if !scanned.contains(where: { $0.y < -0.6 }) { return "Point the phone lower, toward the floor, and turn slowly." }
+        if !here.contains(where: { $0.y < -0.6 }) { return "Point the phone lower, toward the floor, and turn slowly." }
         return Self.promptLine
     }
 
@@ -155,6 +186,8 @@ public struct ScanPlanner: Sendable {
     static func direction(_ t: simd_float4x4) -> SIMD3<Float> {
         simd_normalize(-SIMD3(t.columns.2.x, t.columns.2.y, t.columns.2.z))
     }
+
+    static func position(_ t: simd_float4x4) -> SIMD3<Float> { SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z) }
 
     static func angle(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Float {
         acos(max(-1, min(1, simd_dot(a, b))))

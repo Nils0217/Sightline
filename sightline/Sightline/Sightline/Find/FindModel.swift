@@ -32,6 +32,8 @@ final class FindModel {
     /// Palm-centre reference point (red dot) and visible fingertips (small dots), world space.
     private(set) var palm: SIMD3<Float>?
     private(set) var fingertips: [SIMD3<Float>] = []
+    /// Bumped when tracking is reset; the camera view then anchors its dots again.
+    private(set) var sessionResets = 0
     private(set) var handDistance: Float?
     /// "6/6" etc.: how many of the six keypoints are visible, or the reason none are.
     private(set) var handStatus = "-"
@@ -85,6 +87,14 @@ final class FindModel {
     /// Agent: phrases find_object looked for with nothing found in this search, and finds so far.
     @ObservationIgnored private var notFound: [String] = []
     @ObservationIgnored private var agentFinds = 0
+    /// Spark's names for words SAM cannot see ("vitamin" -> "pill bottle"), kept on the phone (2026-11-02).
+    @ObservationIgnored private let samNames = SAMNames()
+    /// What SAM was last asked for in this search (logged when it changes).
+    @ObservationIgnored private var lastQuery: String?
+    /// SAM looked only where the room map says the object is and found nothing: after 2, whole photos only.
+    @ObservationIgnored private var cropMisses = 0
+    /// Per saved name, this launch: its spot seen clearly and empty (`checkSavedSpot`).
+    @ObservationIgnored private var spotMisses: [String: Int] = [:]
     /// Landmark alignment of the saved room (Spark lists what is in view, matched to the saved names).
     @ObservationIgnored private var alignInFlight = false
     @ObservationIgnored private var alignsThisSearch = 0
@@ -471,7 +481,8 @@ final class FindModel {
             return nil
         }
         holdSAMCalls += 1
-        guard let response = try? await MetaAPI.segment(noun: noun, jpeg: s.jpeg,
+        // The name SAM can see ("pill bottle"), as for the search (v9.4: the check asked for "vitamin").
+        guard let response = try? await MetaAPI.segment(noun: samQuery(noun), jpeg: s.jpeg,
                                                         imageLabel: "still_\(sessionID)_\(holdSAMCalls)") else { return nil }
         guard expectedSession == sessionID, expectedCheck == holdCheckID, phase == .verifying else { return nil }
         return Self.candidates(from: SAMParser.parse(response.text), snapshot: s, scale: bodyScale)
@@ -549,6 +560,8 @@ final class FindModel {
         candidates = []
         notFound = []
         agentFinds = 0
+        lastQuery = nil
+        cropMisses = 0
         agentPhotos = []
         rejected = []
         whichAsked = false
@@ -578,6 +591,7 @@ final class FindModel {
         beginSession(name: noun)
         log("command", noun)
         tryAlignRoom()
+        askSAMNames(noun)
         // Instant local cue (G4): the user hears something before any network call.
         speaker.say("Looking for the \(noun).")
         let id = sessionID
@@ -644,6 +658,8 @@ final class FindModel {
     private func segment(_ noun: String, scanning: Bool = false) async -> Result<[Candidate], FindError> {
         let id = sessionID
         guard scanning || samCalls < Self.maxSAMCalls else { return .failure(FindError("budget")) }
+        let query = samQuery(noun)
+        // The user's word decides the tiles: a looked-up name can share a word with a tiny thing ("pill bottle").
         let tiled = SmallObjects.isSmall(noun)
         guard let s = await snapshot(longEdge: tiled ? FrameSnapshot.tiledLongEdge : FrameSnapshot.longEdge) else {
             return .failure(FindError("no_frame"))
@@ -653,16 +669,43 @@ final class FindModel {
         lastJPEG = s.jpeg
         do {
             let label = "find_\(sessionID)_\(samCalls + scanCalls)"
-            var records: [SAMRecord]
-            var samText: String
-            var extra: [String: Any] = ["scanning": scanning]
-            if tiled {
+            var records: [SAMRecord] = []
+            var samText = ""
+            var extra: [String: Any] = ["scanning": scanning, "query": query]
+            // The room map says where it is and that spot is in this photo: SAM looks there only (one call, even for
+            // a small thing). Nothing there: the whole photo, same snapshot (moved or hidden, 2026-11-02).
+            var cropped = false
+            let mapItem = room.item(for: noun)
+            if cropMisses < 2, let w = mapItem?.world,
+               let p = RoomInventory.portraitPoint(world: w, intrinsics: s.intrinsics, cameraTransform: s.cameraTransform) {
+                let tile = SmallObjects.tile(around: p, in: s.imageSize)
+                let rect = CGRect(x: tile.origin.x, y: tile.origin.y, width: tile.size.x, height: tile.size.y)
+                if let jpeg = Self.crop(s.jpeg, to: rect, margin: 0) {
+                    samText = try await MetaAPI.segment(noun: query, jpeg: jpeg, imageLabel: "\(label)_map").text
+                    records = SmallObjects.parseTiled(samText, origins: [tile.origin], fullSize: s.imageSize)
+                    extra["tile_origins"] = [[tile.origin.x, tile.origin.y]]
+                    extra["tile_size"] = [tile.size.x, tile.size.y]
+                    cropped = true
+                    if records.isEmpty {
+                        cropMisses += 1
+                        log("sam_map_crop", "nothing at the map spot (\(cropMisses))")
+                    } else {
+                        log("sam_map_crop", "\(records.count) found at the map spot")
+                    }
+                }
+                guard id == sessionID else { return .failure(FindError("cancelled")) }
+            }
+            if cropped && !records.isEmpty {
+                // Found where the map said.
+            } else if tiled {
+                extra["tile_origins"] = nil
+                extra["tile_size"] = nil
                 let tiles = SmallObjects.tiles(for: s.imageSize)
                 let texts = try await withThrowingTaskGroup(of: (Int, String).self) { group in
                     for (i, tile) in tiles.enumerated() {
                         let rect = CGRect(x: tile.origin.x, y: tile.origin.y, width: tile.size.x, height: tile.size.y)
                         guard let jpeg = Self.crop(s.jpeg, to: rect, margin: 0) else { continue }
-                        group.addTask { (i, try await MetaAPI.segment(noun: noun, jpeg: jpeg, imageLabel: "\(label)_tile\(i)").text) }
+                        group.addTask { (i, try await MetaAPI.segment(noun: query, jpeg: jpeg, imageLabel: "\(label)_tile\(i)").text) }
                     }
                     var out = [String](repeating: "", count: tiles.count)
                     for try await (i, text) in group { out[i] = text }
@@ -673,7 +716,9 @@ final class FindModel {
                 extra["tile_origins"] = tiles.map { [$0.origin.x, $0.origin.y] }
                 extra["tile_size"] = [tiles[0].size.x, tiles[0].size.y]
             } else {
-                samText = try await MetaAPI.segment(noun: noun, jpeg: s.jpeg, imageLabel: label).text
+                extra["tile_origins"] = nil
+                extra["tile_size"] = nil
+                samText = try await MetaAPI.segment(noun: query, jpeg: s.jpeg, imageLabel: label).text
                 records = SAMParser.parse(samText)
             }
             guard id == sessionID else { return .failure(FindError("cancelled")) }
@@ -685,6 +730,7 @@ final class FindModel {
                 c.info.name = noun
                 return c
             }
+            if cropped, list.isEmpty, let item = mapItem { checkSavedSpot(item, snapshot: s) }
             for c in list where c.recorded.reprojectsInsideMask == false {
                 log("target_outside_mask", "id \(c.info.id)")
             }
@@ -745,6 +791,8 @@ final class FindModel {
         let boxPixels = Float(max(r.right - r.left, r.bottom - r.top)) * s.intrinsics.imageSize.y / Float(r.sourceWidth)
         var seeThrough = false
         if let o = object, !o.fitsBox(boxPixels * -hit.cameraPoint.z / s.intrinsics.fx) { object = nil; seeThrough = true }
+        // How deep its unseen back reaches: the box width in metres (v9.4: the bottle's back became an obstacle).
+        object?.hiddenDepth = Float(r.right - r.left) * s.intrinsics.imageSize.y / Float(r.sourceWidth) * -hit.cameraPoint.z / s.intrinsics.fx
         let obstacles = object.flatMap {
             ObstacleMap.build(mask: mask, depth: s.depth, intrinsics: s.intrinsics, cameraTransform: t, object: $0, scale: scale)
         }
@@ -820,7 +868,12 @@ final class FindModel {
             // No frame for the saved map yet: what it was on and next to still holds (Nils, 2026-11-01).
             text = rel + " " + text
             log("room_relation", "\(item.name): \(inv.relation(item))")
-        } else if let inventory = room.activeInventory ?? room.inventory, !inventory.items.isEmpty {
+        } else if let names = room.inventory?.fits(noun), names.count > 1 {
+            // Several saved things fit the word: say them, no direction to one of them (review 2026-11-02).
+            text = "I remember " + Self.spokenList(names.prefix(3).map { "a \($0)" }) + ". " + text
+            log("room_several", names.joined(separator: ", "))
+        } else if let inventory = room.activeInventory ?? room.inventory,
+                  !inventory.items.isEmpty {
             guessFromRoom(noun, inventory: inventory, located: room.activeInventory != nil)
         }
         scan = planner
@@ -828,6 +881,65 @@ final class FindModel {
         phase = .searching
         log("scan_start", "")
         say(SpokenLine(text: text, interrupt: true))
+    }
+
+    /// "a, b and c".
+    static func spokenList(_ parts: [String]) -> String {
+        parts.count <= 1 ? parts.joined() : parts.dropLast().joined(separator: ", ") + " and " + parts.last!
+    }
+
+    /// The saved spot was in clear view (within 2 m, nothing in front) and neither the crop there nor the whole photo
+    /// found it. Twice in a launch: the map was wrong or it was moved (v9.4: the scan called a shaker a "water bottle"
+    /// and two searches steered there). Say so, forget that entry, stop steering there.
+    private func checkSavedSpot(_ item: RoomItem, snapshot s: FrameSnapshot) {
+        let camera = SIMD3(s.cameraTransform.columns.3.x, s.cameraTransform.columns.3.y, s.cameraTransform.columns.3.z)
+        guard simd_distance(camera, item.world) < 2, Self.inView(item.world, snapshot: s) else { return }
+        let misses = (spotMisses[item.name] ?? 0) + 1
+        spotMisses[item.name] = misses
+        log("room_spot_empty", "\(item.name) (\(misses))")
+        guard misses >= 2 else { return }
+        room.forget(item.name, near: item.world)
+        log("room_map_forgot", item.name)
+        if let hint = scan?.hint, simd_distance(hint, item.world) < 0.3 { scan?.hint = nil }
+        let place = item.on.map { " on the \($0)" } ?? ""
+        say(SpokenLine(text: "I remembered a \(item.name)\(place), but it isn't there.", interrupt: false))
+    }
+
+    /// What SAM is asked for: the saved room's name for it ("vitamin" -> "vitamin bottle", or an alias from the
+    /// scan), else Spark's name kept on the phone, else the user's word (2026-11-02).
+    private func samQuery(_ noun: String) -> String {
+        var query = noun, why = ""
+        if let q = room.inventory?.searchName(for: noun), q != noun {
+            query = q; why = "room map"
+        } else if let q = samNames.lookup(noun)?.first, q != noun.lowercased() {
+            query = q; why = "spark"
+        }
+        if query != (lastQuery ?? noun) { log("sam_query", "\(noun) -> \(query)" + (why.isEmpty ? "" : " (\(why))")) }
+        lastQuery = query
+        return query
+    }
+
+    /// A word the room map does not know and Spark was never asked about: ask once (text only, effort minimal,
+    /// about $0.001), in parallel with the first SAM call on the user's own word; later views use the answer.
+    private func askSAMNames(_ noun: String) {
+        guard room.inventory?.match(noun) == nil, samNames.lookup(noun) == nil else { return }
+        let id = sessionID
+        Task {
+            let names = (try? await MuseAgent.samNames(noun: noun, label: "names_\(id)")) ?? []
+            samNames.store(noun, names)
+            log("sam_names", "\(noun) -> " + (names.isEmpty ? "(none)" : names.joined(separator: ", ")))
+        }
+    }
+
+    /// A world point is in this photo, within 3.5 m, with nothing nearer in front of it (LiDAR at that pixel is not
+    /// more than 30 cm closer). No depth there: not counted as in view, so nothing is dropped on a guess.
+    static func inView(_ w: SIMD3<Float>, snapshot s: FrameSnapshot) -> Bool {
+        let camera = SIMD3(s.cameraTransform.columns.3.x, s.cameraTransform.columns.3.y, s.cameraTransform.columns.3.z)
+        let d = simd_distance(camera, w)
+        guard d < 3.5, let p = RoomInventory.portraitPoint(world: w, intrinsics: s.intrinsics, cameraTransform: s.cameraTransform),
+              let hit = RoomInventory.place(portrait: p, depth: s.depth, intrinsics: s.intrinsics, cameraTransform: s.cameraTransform)
+        else { return false }
+        return simd_distance(camera, hit) > d - 0.3
     }
 
     /// The saved room has no frame (ARKit did not match): Spark lists what is in view, LiDAR places it, and
@@ -847,10 +959,11 @@ final class FindModel {
                 log("room_align", "no answer")
                 return
             }
-            let seen = RoomInventory.parseSparkObjects(reply).compactMap { o -> (name: String, world: SIMD3<Float>)? in
+            let objects = RoomInventory.parseSparkObjects(reply).compactMap { o -> (RoomInventory.SparkObject, SIMD3<Float>)? in
                 RoomInventory.place(portrait: o.point, depth: s.depth, intrinsics: s.intrinsics, cameraTransform: s.cameraTransform)
-                    .map { (o.name, $0) }
+                    .map { (o, $0) }
             }
+            let seen = objects.map { (name: $0.0.name, world: $0.1) }
             guard room.needsAlignment else { return }
             guard let r = saved.alignment(to: seen) else {
                 log("room_align", "no match: seen " + seen.map(\.name).joined(separator: " "))
@@ -858,8 +971,21 @@ final class FindModel {
             }
             room.align(r.transform)
             log("room_map_aligned", r.inliers.joined(separator: " "))
-            // A scan already running for something the map knows: turn it there now.
-            guard id == sessionID, phase == .searching, let noun = targetName, let item = room.item(for: noun) else { return }
+            // The same listing, now with a frame: movable things the scan missed (hidden behind something bigger)
+            // go into the map, and the ones it had get their new place. No extra call (2026-11-02).
+            // Rolling update: a saved thing whose spot is in this photo, with nothing in front of it, but was seen
+            // elsewhere has moved; its old entry goes (Nils, 2026-11-02).
+            let sightings = objects.filter { !$0.0.fixed }.map {
+                RoomInventory.Sighting(name: $0.0.name, world: $0.1, on: $0.0.on, aliases: $0.0.aliases.isEmpty ? nil : $0.0.aliases)
+            }
+            if let r = room.refresh(sightings, source: "seen", isVisible: { Self.inView($0, snapshot: s) }) {
+                if !r.added.isEmpty { log("room_map_added", r.added.joined(separator: " ")) }
+                if !r.removed.isEmpty { log("room_map_moved", r.removed.joined(separator: " ")) }
+            }
+            // A scan already running for something the map knows: turn it there now. No scan yet: startScan says
+            // the hint itself (review 2026-11-01: it was said twice, and during the first look at this view).
+            guard id == sessionID, phase == .searching, scan != nil, let noun = targetName,
+                  let item = room.item(for: noun) else { return }
             scan?.hint = item.world
             scan?.hintIsGuess = false
             log("room_hint", "\(item.name) \(item.source) \(item.seen) (aligned)")
@@ -1364,6 +1490,15 @@ final class FindModel {
                 startScan(noun)
                 return .ended
             }
+            // v9.4: six names (vitamin bottle, pill bottle, medicine bottle, ...) on a view with no bottle, 79 s.
+            // Two names found nothing here: it is not in this view; turn the user and look (first name, which SAM
+            // gets as its search name).
+            if notFound.count >= 2, let first = notFound.first {
+                log("agent_scan", "\(notFound.count) names not in view; \(noun) -> scan for \(first)")
+                targetName = first
+                startScan(first)
+                return .ended
+            }
             speaker.say("Looking for the \(noun).")
             agentFinds += 1
             let result = await segment(noun)
@@ -1611,6 +1746,7 @@ final class FindModel {
         relocalizingSince = nil
         log("room_map_fallback", reason)
         session.run(Self.trackingConfig(), options: [.resetTracking, .removeExistingAnchors])
+        sessionResets += 1  // the camera view re-adds its dots (v9.4: none were drawn after this reset)
     }
 
     private func startMapping() {
@@ -1662,7 +1798,8 @@ final class FindModel {
                 for o in RoomInventory.parseSparkObjects(reply) {
                     guard let p = RoomInventory.place(portrait: o.point, depth: s.depth, intrinsics: s.intrinsics,
                                                       cameraTransform: s.cameraTransform) else { continue }
-                    mapInventory.remember(o.name, at: p, date: Date(), source: "room_scan", on: o.on, fixed: o.fixed ? true : nil)
+                    mapInventory.remember(o.name, at: p, date: Date(), source: "room_scan", on: o.on, fixed: o.fixed ? true : nil,
+                                         aliases: o.aliases.isEmpty ? nil : o.aliases)
                     names.append(o.name)
                 }
                 log("map_view", "\(view): " + names.joined(separator: " "))

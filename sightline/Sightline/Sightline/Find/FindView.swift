@@ -111,16 +111,18 @@ private struct FindARContainer: UIViewRepresentable {
         let view = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
         view.session = model.session
         view.renderOptions.insert(.disableMotionBlur)
-        let root = AnchorEntity(world: .zero)
-        root.addChild(context.coordinator.targetDot)
-        root.addChild(context.coordinator.palmDot)
-        context.coordinator.tipDots.forEach { root.addChild($0) }
-        view.scene.addAnchor(root)
+        context.coordinator.anchorDots(in: view)
+        context.coordinator.resets = model.sessionResets
         model.arView = view
         return view
     }
 
     func updateUIView(_ view: ARView, context: Context) {
+        // v9.4 device run: after the saved room failed to match, tracking was reset and no dot was drawn again.
+        if context.coordinator.resets != model.sessionResets || context.coordinator.root?.scene == nil {
+            context.coordinator.resets = model.sessionResets
+            context.coordinator.anchorDots(in: view)
+        }
         context.coordinator.place(context.coordinator.targetDot, at: model.target)
         context.coordinator.place(context.coordinator.palmDot, at: model.palm)
         for (i, dot) in context.coordinator.tipDots.enumerated() {
@@ -135,6 +137,20 @@ private struct FindARContainer: UIViewRepresentable {
         let palmDot = ModelEntity(mesh: .generateSphere(radius: 0.008), materials: [UnlitMaterial(color: .red)])
         let tipDots = (0..<5).map { _ in
             ModelEntity(mesh: .generateSphere(radius: 0.004), materials: [UnlitMaterial(color: .orange)])
+        }
+
+        var root: AnchorEntity?
+        var resets = 0
+
+        /// A new world anchor at the origin holding every dot (the old one is removed).
+        func anchorDots(in view: ARView) {
+            if let root { view.scene.removeAnchor(root) }
+            let anchor = AnchorEntity(world: .zero)
+            anchor.addChild(targetDot)
+            anchor.addChild(palmDot)
+            tipDots.forEach { anchor.addChild($0) }
+            view.scene.addAnchor(anchor)
+            root = anchor
         }
 
         func place(_ dot: ModelEntity, at position: SIMD3<Float>?) {

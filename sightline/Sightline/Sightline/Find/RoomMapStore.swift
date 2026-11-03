@@ -65,10 +65,11 @@ final class RoomMapStore {
         return alignment.map { RoomInventory.apply($0.inverse, p) }
     }
 
-    /// A successful find while the map has a frame: remember where the object is now.
-    func remember(_ name: String, at p: SIMD3<Float>) {
+    /// A successful find while the map has a frame: remember where the object is now. `source` "seen": Spark listed
+    /// it in a later view (2026-11-02: things hidden at scan time get into the map when they show up).
+    func remember(_ name: String, at p: SIMD3<Float>, source: String = "found", on: String? = nil, aliases: [String]? = nil) {
         guard let saved = toSaved(p), var inv = inventory else { return }
-        inv.remember(name, at: saved, date: Date(), source: "found")
+        inv.remember(name, at: saved, date: Date(), source: source, on: on, aliases: aliases)
         inventory = inv
         saveInventory()
     }
@@ -79,6 +80,14 @@ final class RoomMapStore {
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try? encoder.encode(inventory).write(to: Self.inventoryURL, options: .atomic)
+    }
+
+    /// Not at its saved spot (`FindModel.checkSavedSpot`): drop that entry. `p` is in this launch's frame.
+    func forget(_ name: String, near p: SIMD3<Float>) {
+        guard let saved = toSaved(p), var inv = inventory else { return }
+        inv.forget(name, near: saved)
+        inventory = inv
+        saveInventory()
     }
 
     /// Picked up (pick-up confirmed): it is with the user now, not where it was found.
@@ -96,9 +105,24 @@ final class RoomMapStore {
         return nil
     }
 
-    /// Hint for a noun when the map has a frame: the item and where it is now.
-    func item(for noun: String) -> RoomItem? { activeInventory?.match(noun) }
+    /// Hint for a noun when the map has a frame: the one thing it means and where it is now (nil when the word fits
+    /// several saved things, review 2026-11-02: "bottle" pointed at one of two bottles).
+    func item(for noun: String) -> RoomItem? { activeInventory?.target(for: noun) }
 
-    /// The saved item without a frame (relations only: "on the desk, next to the laptop").
-    func savedItem(for noun: String) -> RoomItem? { inventory?.match(noun) }
+    /// The saved item without a frame (relations only: "on the desk, next to the laptop"); same rule.
+    func savedItem(for noun: String) -> RoomItem? { inventory?.target(for: noun) }
+
+    /// Rolling update from one listed view with a frame (positions and `isVisible` in this launch's world).
+    func refresh(_ seen: [RoomInventory.Sighting], source: String,
+                 isVisible: (SIMD3<Float>) -> Bool) -> (added: [String], removed: [String])? {
+        guard var inv = inventory, active || alignment != nil else { return nil }
+        let toWorld: (SIMD3<Float>) -> SIMD3<Float> = { [alignment] p in alignment.map { RoomInventory.apply($0, p) } ?? p }
+        let saved = seen.compactMap { s -> RoomInventory.Sighting? in
+            toSaved(s.world).map { RoomInventory.Sighting(name: s.name, world: $0, on: s.on, aliases: s.aliases) }
+        }
+        let r = inv.refresh(with: saved, date: Date(), source: source, isVisible: { isVisible(toWorld($0)) })
+        inventory = inv
+        saveInventory()
+        return r
+    }
 }
