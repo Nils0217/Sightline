@@ -53,6 +53,8 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `docs/assets/g1_marker_print.pdf` | testing, generated | Printable 10 cm G1 marker |
 | `tools/make_g1_marker.py` | testing, needs-review | Generates the G1 marker PNG + PDF |
 | `tools/make_sam_fixtures.py` | testing, needs-review | Builds SAM decoder fixtures with Meta's Python parser (needs `.venv`) |
+| `tools/check_log.py` | testing, needs-review | Screens a device find log (and api_calls.csv) for failures recorded in TEST_LOG |
+| `tools/regress.sh` | testing, needs-review | Unit tests + simulator gate + device log screen, before every device test |
 | `tools/ios_secrets.sh` | config, sensitive | Writes the API key into the gitignored `Secrets.plist`; never prints it |
 | `Packages/SightlineCore/Tests/SightlineCoreTests/Fixtures/` | testing, generated | Real SAM outputs + expected decodes from the Python parser |
 | `Packages/SightlineCore/` | production, needs-review, important | Pure geometry / sampling / stats; unit-tested on Mac |
@@ -68,6 +70,8 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `Packages/SightlineCore/Sources/SightlineCore/ObjectModel.swift` | production, needs-review, important | Visible target shape/support, provisional grip geometry, capsule obstacle screen and conservative hold decision |
 | `Packages/SightlineCore/Sources/SightlineCore/ScanPlanner.swift` | production, needs-review, important | Keep-scanning: when a new view deserves a SAM call; scan phrases; which way to turn next |
 | `Packages/SightlineCore/Sources/SightlineCore/RoomInventory.swift` | production, needs-review, important | Room map inventory (names + world positions, hints), Spark object-list parsing, LiDAR placement, small-object tiles |
+| `Packages/SightlineCore/Sources/SightlineCore/SparkPick.swift` | production, needs-review | Spark picks the target: parse its point, choose the SAM outline holding it, square mask when none |
+| `Packages/SightlineCore/Sources/SightlineCore/FindRules.swift` | production, needs-review | The search's decision rules (name widening, SAM query order, next candidate, fallback, clear view, room-scan finish), one test per recorded device failure |
 | `Packages/SightlineCore/Sources/SightlineSim/Replay.swift` | testing, needs-review | `SightlineSim replay <folder>`: object model + grasp check on a device recording (read-only) |
 | `Packages/SightlineCore/Sources/SightlineSim/` | testing, needs-review, important | Mac simulator of the guidance loop: `swift run SightlineSim` (stdout only, writes no files) |
 | `Sightline/Sightline.xcodeproj` | production, config | Xcode project |
@@ -88,6 +92,8 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `Sightline/Sightline/Audio/Haptics.swift` | production, needs-review | Haptic cues for taps, reset, success, warning |
 | `Sightline/Sightline/Audio/MuseStream.swift` | production, needs-review, sensitive | Muse Voice Transcribe realtime stream and stop rule (branch muse-voice); reads the API key |
 | `Packages/SightlineCore/Tests/SightlineCoreTests/RoomInventoryTests.swift` | testing, needs-review | Room inventory, placement, tiles, scan directions |
+| `Packages/SightlineCore/Tests/SightlineCoreTests/SparkPickTests.swift` | testing, needs-review | SparkPick parsing, outline choice, point mask |
+| `Packages/SightlineCore/Tests/SightlineCoreTests/FindRulesTests.swift` | testing, needs-review | One test per TEST_LOG failure whose rule is in FindRules (T14-T19) |
 | `Packages/SightlineCore/Tests/SightlineCoreTests/ReviewFixTests.swift` | testing, needs-review | Muse review 2026-10-30: hold decision matrix, check re-arm/cap/timeout, agent text, room naming, turn sizes |
 | `Sightline/Sightline/Find/DiagnosticRecorder.swift` | testing, needs-review, important | Recording mode: photo, SAM, overlay, screen, depth per event into `Documents/diagnostics/<launch>/` |
 | `logs/device/` (not in git) | generated, sensitive | Exported device logs and recordings (photos of Nils's room) |
