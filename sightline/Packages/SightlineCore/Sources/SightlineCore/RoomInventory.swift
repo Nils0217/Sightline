@@ -437,6 +437,51 @@ extension SAMRecord {
     }
 }
 
+/// One search's names for the target (2026-11-03 alignment: SAM was asked one name, Spark was
+/// asked another, the map stored a third, so a found object failed verification or polluted the map).
+/// Built once per search in FindModel; every judge reads from it instead of re-deriving a name.
+public struct TargetVocabulary: Sendable, Equatable {
+    /// What the user said ("vitamin"): spoken lines and log keys only.
+    public var userPhrase: String
+    /// What SAM is asked for ("vitamin bottle"): the visible name.
+    public var samQuery: String
+    /// The identity ("vitamin bottle"): Spark verification, hold checks, room storage.
+    public var canonical: String
+    /// Other words for it from the room scan ("vitamins", "supplements").
+    public var aliases: [String]
+
+    public init(userPhrase: String, samQuery: String, canonical: String, aliases: [String] = []) {
+        self.userPhrase = userPhrase
+        self.samQuery = samQuery
+        self.canonical = canonical
+        self.aliases = aliases
+    }
+
+    /// For Spark identity prompts: "vitamin (vitamin bottle)". The user phrase alone when unknown.
+    public var verifyPhrase: String {
+        RoomInventory.words(canonical) == RoomInventory.words(userPhrase) || canonical.isEmpty
+            ? userPhrase : "\(userPhrase) (\(canonical))"
+    }
+
+    /// Does a Spark-given name mean this target (obstacle `sameKind`, room matches)?
+    public func matches(_ name: String) -> Bool {
+        Self.sameWords(name, canonical) || Self.sameWords(name, userPhrase)
+            || aliases.contains { Self.sameWords($0, name) }
+    }
+
+    /// "Books" / "book", "key" / "green key": equal after a light singularise, or one ends with the other.
+    public static func sameWords(_ a: String, _ b: String) -> Bool {
+        let x = norm(a), y = norm(b)
+        return !x.isEmpty && !y.isEmpty && (x == y || x.hasSuffix(" " + y) || y.hasSuffix(" " + x))
+    }
+
+    private static func norm(_ s: String) -> String {
+        var t = s.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.hasSuffix("es"), t.count > 4 { t.removeLast(2) } else if t.hasSuffix("s"), t.count > 3 { t.removeLast() }
+        return t
+    }
+}
+
 /// Spark's names SAM can look for (`{"names":["pill bottle","supplement jar"]}`), lowercased, at most 3.
 public enum VisualNames {
     public static func parse(_ text: String) -> [String] {

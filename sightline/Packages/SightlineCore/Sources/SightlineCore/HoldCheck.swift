@@ -11,13 +11,13 @@ public enum HoldContact {
     public static func near(hand: HandKeypoints?, points: [SIMD3<Float>], centre: SIMD3<Float>) -> Bool {
         guard let hand else { return false }
         let surface = points.isEmpty ? [centre] : points
-        return hand.tips.values.filter { tip in surface.contains { simd_distance($0, tip) <= 0.04 } }.count >= 2
+        return hand.tips.values.filter { tip in surface.contains { simd_distance($0, tip) <= Geometry.near } }.count >= 2
     }
 }
 
 public enum HoldGeometry {
     /// Where it was found: within this of the original spot counts as "still there".
-    public static let spotRadius: Float = 0.05
+    public static let spotRadius: Float = Geometry.same
     /// A supported object must rise this much; sliding it on the table is not a pick-up.
     public static let minRise: Float = 0.03
 

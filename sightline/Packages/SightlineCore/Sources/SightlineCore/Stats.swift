@@ -1,6 +1,26 @@
 // labels: production, needs-review
 // Summary statistics for G1 error reports.
 
+/// One distance per meaning (2026-11-03 alignment: every judge used its own radius for the same
+/// "touching / same thing / already seen", so the hold check, guidance and the map disagreed).
+/// Same level, same value; BodyScale derives the per-user value from these.
+public enum Geometry {
+    /// Contact level: a fingertip on the surface (grasp, touch, near).
+    public static let touch: Float = 0.03
+    /// Contact level: a fingertip at the object, arming the leave/rise checks.
+    public static let near: Float = 0.04
+    /// Object level: two detections / spots are the same thing (tile dedup, agent merge,
+    /// still-at-spot, mark-other).
+    public static let same: Float = 0.05
+    /// Skip level: an already-rejected lock, or a same-named cluster that is the target's own
+    /// edge, is not locked or named again within this of it.
+    public static let skip: Float = 0.10
+    /// Room level: two sightings are the same saved thing.
+    public static let roomSame: Float = 0.50
+    /// Room level: landmark alignment agreement.
+    public static let align: Float = 0.25
+}
+
 public enum Stats {
     public static func median(_ values: [Float]) -> Float? {
         percentile(values, 0.5)

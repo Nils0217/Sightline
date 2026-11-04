@@ -68,6 +68,23 @@ import simd
         let out = s.update(time: 1, hand: hand([0, 0, -0.2]), cameraTransform: turned, targetDepthDelta: nil, speaking: false)
         #expect(s.endReason == nil && !out.lines.contains { $0.interrupt })
     }
+    /// T20: the fingers stop against a thermos 25 cm short of the bottle, which is ahead and to the left; the
+    /// thermos is not in the map (carved as hand). "Something is in the way. Go around it on your left." before any check.
+    @Test func handStoppedShortIsToldToGoAround() {
+        var s = GuidanceSession(targetName: "pill bottle", target: [-0.08, 0, -0.45], cameraTransform: camera, time: 0)
+        let stuck = SIMD3<Float>(0, 0, -0.2)
+        var said: [String] = []
+        var checks = 0
+        for i in 0..<1200 {
+            let p = stuck + SIMD3(0, 0, Float(i % 90 < 6 ? -0.001 * Double(i % 90) : 0))
+            let out = s.update(time: Double(i) / 30, hand: hand(p), cameraTransform: camera, targetDepthDelta: nil, speaking: false)
+            said += out.lines.map(\.text)
+            if out.requestCheck, checks == 0 { checks = said.count }
+        }
+        let blocked = said.firstIndex(of: "Something is in the way. Go around it on your left.")
+        #expect(blocked != nil && (checks == 0 || blocked! < checks), "\(said)")
+    }
+
     /// A small cluster (3 cm cells), like a real thing standing there; one point is noise.
     func cluster(_ p: SIMD3<Float>) -> ObstacleMap {
         ObstacleMap(points: [p, p + [0.01, 0, 0], p + [0, 0.015, 0], p + [0, 0, 0.01]])
@@ -103,6 +120,17 @@ import simd
         #expect(lines.contains("Careful. A bottle is on your right."), "\(lines)")
         #expect(!lines.contains { $0.hasPrefix("Stop. ") })
         #expect(lines.contains { $0.hasPrefix("Right") || $0.hasPrefix("Keep going right") })
+    }
+    /// T15: the bottle 2.5 m away on a shelf, things beside it: nothing is in front of the hand, so no
+    /// "Something is ahead. Go around it." until the hand comes within an arm-sized 30 cm of them.
+    @Test func thingsBesideAFarTargetAreNotAhead() {
+        var s = GuidanceSession(targetName: "bottle", target: [0, 0, -2.5], cameraTransform: camera, time: 0)
+        var lines: [String] = []
+        for i in 0..<240 {
+            lines += s.update(time: Double(i) / 30, hand: hand([0, 0, -0.3]), cameraTransform: camera, targetDepthDelta: nil,
+                              speaking: false, liveObstacles: cluster([0.03, 0, -2.3])).lines.map(\.text)
+        }
+        #expect(!lines.contains { $0.contains("ahead") || $0.hasPrefix("Careful") || $0.hasPrefix("Stop") }, "\(lines)")
     }
     /// Ahead: pass it on the side the object is on, so the next direction agrees.
     @Test func obstacleAheadIsPassedOnTheObjectSide() {

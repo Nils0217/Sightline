@@ -64,7 +64,9 @@ final class FindModel {
     /// Room scan in progress ("scan the room").
     @ObservationIgnored private var mapPlanner: ScanPlanner?
     @ObservationIgnored private var mapInventory = RoomInventory(created: Date())
-    @ObservationIgnored private var mapInFlight = 0
+    /// Room views being listed, and a finish tap waiting for them (`FindRules.RoomScanFinish`, T19).
+    @ObservationIgnored private var mapFinish = FindRules.RoomScanFinish()
+    private var mapInFlight: Int { mapFinish.inFlight }
     @ObservationIgnored private var mapViews = 0
     @ObservationIgnored private var guide: GuidanceSession?
     /// Keep-scanning state while the object is not in view (ScanPlanner decides when to call SAM).
@@ -87,6 +89,17 @@ final class FindModel {
     /// Agent: phrases find_object looked for with nothing found in this search, and finds so far.
     @ObservationIgnored private var notFound: [String] = []
     @ObservationIgnored private var agentFinds = 0
+    /// Agent: the user's own words, and the broader name SAM gets for a narrower one the agent widened
+    /// ("vitamin bottle" -> "bottle", T15).
+    @ObservationIgnored private var agentHeard: Set<String> = []
+    @ObservationIgnored private var broader: [String: String] = [:]
+    /// Spark picks the target, SAM only outlines it (Nils, 2026-11-03, after T17). False: the SAM-first path with
+    /// Spark's yes/no check and the agent, kept for comparison.
+    static let sparkFirst = true
+    /// The user's own words for this search (Spark picks with them), and what Spark says the target looks like
+    /// (SAM's name for it, hold checks too).
+    @ObservationIgnored private var userWords: String?
+    @ObservationIgnored private var seenAs: [String: String] = [:]
     /// Spark's names for words SAM cannot see ("vitamin" -> "pill bottle"), kept on the phone (2026-11-02).
     @ObservationIgnored private let samNames = SAMNames()
     /// What SAM was last asked for in this search (logged when it changes).
@@ -189,7 +202,17 @@ final class FindModel {
 
     func finishRoomScan() {
         guard phase == .mapping else { return }
-        finishMapping(early: true)
+        // T19: tapped 2 s after the second view went out; its answer (20 s) came after the save and was lost, and
+        // "I didn't find anything to remember" was said. Views still being listed are waited for.
+        switch mapFinish.tap() {
+        case .saveNow:
+            finishMapping(early: true)
+        case .wait:
+            log("map_finish_wait", "\(mapInFlight) views")
+            say(SpokenLine(text: "Saving the room. One moment.", interrupt: true))
+        case .ignore:
+            break
+        }
     }
 
     /// Double tap = "Is this it?" (case 2, Nils 2026-11-01: holding something and not sure). Idle: same as
@@ -412,8 +435,8 @@ final class FindModel {
         let supported = guide?.object?.supportHeight != nil
         Task {
             async let seen = holdCandidates(noun, snapshot: s, expectedSession: id, expectedCheck: check)
-            async let spark = try? MuseAgent.verifyHolding(noun: noun, jpeg: s.jpeg, reference: reference,
-                                                           label: "hold_\(id)_\(check)")
+            async let spark = try? MuseAgent.verifyHolding(noun: vocabulary(for: noun).verifyPhrase, jpeg: s.jpeg,
+                                                           reference: reference, label: "hold_\(id)_\(check)")
             let (list, sparkSays) = await (seen, spark)
             guard id == sessionID, check == holdCheckID, phase == .verifying else { return }
             // The candidate nearest the hand (else the original spot) is the one that could be in it.
@@ -464,8 +487,8 @@ final class FindModel {
         let id = sessionID, reference = referenceCrop
         log("describe_held", "")
         Task {
-            let text = (try? await MuseAgent.describeHeld(noun: noun, jpeg: photo, reference: reference,
-                                                         label: "describe_\(id)")) ?? ""
+            let text = (try? await MuseAgent.describeHeld(noun: vocabulary(for: noun).verifyPhrase, jpeg: photo,
+                                                         reference: reference, label: "describe_\(id)")) ?? ""
             guard id == sessionID, phase == .grabbing || phase == .guiding else { return }
             let line = text.isEmpty ? "I can't see it well. Hold it in front of the phone." : text
             log("describe_held_result", line)
@@ -560,6 +583,10 @@ final class FindModel {
         candidates = []
         notFound = []
         agentFinds = 0
+        agentHeard = []
+        broader = [:]
+        userWords = nil
+        seenAs = [:]
         lastQuery = nil
         cropMisses = 0
         agentPhotos = []
@@ -573,6 +600,8 @@ final class FindModel {
         checkFromSession = false
         referenceCrop = nil
         lastCheckUnsure = false
+        // T18 row 11: the limit is per search; a new search without a stop kept the last one's count.
+        describes = 0
         userClaimed = false
         burstsThisSearch = 0
         alignsThisSearch = 0
@@ -589,9 +618,10 @@ final class FindModel {
 
     private func startFind(_ noun: String) {
         beginSession(name: noun)
+        userWords = lastHeard.isEmpty ? noun : lastHeard
         log("command", noun)
         tryAlignRoom()
-        askSAMNames(noun)
+        askSAMNames(noun)  // kept with Spark picks: the SAM search after "not in view" uses it
         // Instant local cue (G4): the user hears something before any network call.
         speaker.say("Looking for the \(noun).")
         let id = sessionID
@@ -601,10 +631,29 @@ final class FindModel {
         }
     }
 
+    /// OBSOLETE (Nils, 2026-11-03, after T18: every feature from before Spark picks stays): commands the parser
+    /// cannot read go to the agent again, whose find_object now starts with Spark's pick. Kept for the record.
+    /// The local parser could not read the command ("I want my supplement", "I'm thirsty"): Spark picks from the
+    /// photo with the user's words (sparkFirst); it names the target too.
+    private func startRequest(_ heard: String) {
+        beginSession(name: nil)
+        userWords = heard
+        log("command_pick", heard)
+        tryAlignRoom()
+        speaker.say("One moment.")
+        let id = sessionID
+        Task {
+            guard id == sessionID, phase == .locating else { return }
+            await lock(noun: heard)
+        }
+    }
+
     /// The local parser could not read the command ("I'm thirsty", "the green key"): Muse Spark decides.
     /// Effort medium since v6 (understanding first; v5: "only very simple language works").
     private func startAgent(heard: String) {
         beginSession(name: nil)
+        agentHeard = FindRules.plainWords(heard)
+        userWords = heard
         log("command_agent", heard)
         tryAlignRoom()
         speaker.say("One moment.")
@@ -633,6 +682,8 @@ final class FindModel {
         var sourceJPEG: Data
         /// LiDAR's shape was much wider than the photo box (clear glass): dropped, centre only.
         var seeThrough = false
+        /// Spark picked it (sparkFirst): no second check.
+        var sparkChosen = false
     }
 
     /// OBSOLETE since v9.2: Spark now checks every single lock (T11: a utensil holder locked as "mug" at
@@ -752,7 +803,7 @@ final class FindModel {
     }
 
     /// SAM records -> up to 4 candidates in 3D, most confident first; duplicates from overlapping
-    /// tiles (same place within 4 cm) are dropped.
+    /// tiles (same place within `Geometry.same`) are dropped.
     nonisolated static func candidates(from records: [SAMRecord], snapshot s: FrameSnapshot,
                                        scale: BodyScale = BodyScale()) -> [Candidate] {
         let t = s.cameraTransform
@@ -762,7 +813,7 @@ final class FindModel {
         var out: [Candidate] = []
         for r in sorted where out.count < 4 {
             guard let c = candidate(r, chosen: out.isEmpty, snapshot: s, camera: camera, scale: scale),
-                  !out.contains(where: { simd_distance($0.world, c.world) < 0.04 }) else { continue }
+                  !out.contains(where: { simd_distance($0.world, c.world) < Geometry.same }) else { continue }
             out.append(c)
         }
         return out
@@ -770,9 +821,14 @@ final class FindModel {
 
     nonisolated private static func candidate(_ r: SAMRecord, chosen: Bool, snapshot s: FrameSnapshot,
                                               camera: SIMD3<Float>, scale: BodyScale) -> Candidate? {
-        let t = s.cameraTransform
         guard let raster = try? r.decodeMask() else { return nil }
-        let mask = SourceMask(record: r, raster: raster)
+        return candidate(SourceMask(record: r, raster: raster), chosen: chosen, snapshot: s, camera: camera, scale: scale)
+    }
+
+    nonisolated private static func candidate(_ mask: SourceMask, chosen: Bool, snapshot s: FrameSnapshot,
+                                              camera: SIMD3<Float>, scale: BodyScale) -> Candidate? {
+        let t = s.cameraTransform
+        let r = mask.record
         // Adaptive: small masks (keys, 13x17 px) lose every pixel to the default erosion.
         guard case .success(let hit) = MaskTarget.locateAdaptive(mask: mask, depth: s.depth, intrinsics: s.intrinsics) else { return nil }
         let check = MaskTarget.reprojectsInside(cameraPoint: hit.cameraPoint, mask: mask, intrinsics: s.intrinsics)
@@ -803,8 +859,13 @@ final class FindModel {
 
     private func lock(noun: String) async {
         let id = sessionID
-        let result = await segment(noun)
+        let result = await findCandidates(noun)
         guard id == sessionID, phase == .locating else { return }  // stopped meanwhile
+        // A request ("I want my supplement"): Spark named the target. It could not (no answer): say so, not the sentence.
+        guard let noun = targetName else {
+            finish(spoken: "I couldn't tell what you want. Tap and say its name.", event: "pick_no_name")
+            return
+        }
         switch result {
         case .failure(let error):
             log("sam_lock_fail", error.reason)
@@ -815,11 +876,131 @@ final class FindModel {
         }
     }
 
+    /// Spark picks, SAM outlines (Nils, 2026-11-03, after T13-T17). One Spark call (medium) on the photo with the
+    /// user's words points at the thing they mean; SAM, asked for what Spark says it looks like, outlines it on a crop
+    /// around that point (small things look big there). The outline holding the point is the target; none holds it:
+    /// a square around the point, placed by LiDAR. No second check: Spark already decided what it is.
+    private func sparkSegment(_ noun: String, scanning: Bool = false) async -> Result<[Candidate], FindError> {
+        let id = sessionID
+        guard scanning || samCalls < Self.maxSAMCalls else { return .failure(FindError("budget")) }
+        // The large photo: Spark sees small things, and the crop around its point is a real zoom for SAM.
+        guard let s = await snapshot(longEdge: FrameSnapshot.tiledLongEdge) else { return .failure(FindError("no_frame")) }
+        guard id == sessionID else { return .failure(FindError("cancelled")) }
+        if scanning { scanCalls += 1 } else { samCalls += 1 }
+        lastJPEG = s.jpeg
+        let label = "pick_\(sessionID)_\(samCalls + scanCalls)"
+        let kind = scanning ? "scan" : "sam"
+        guard var pick = try? await MuseAgent.pick(request: userWords ?? noun, jpeg: s.jpeg, label: label) else {
+            log("api_error", "pick: no answer")
+            return .failure(FindError("api_error"))
+        }
+        guard id == sessionID else { return .failure(FindError("cancelled")) }
+        let name = noun
+        guard pick.visible else {
+            log("spark_pick", "\(pick.want.isEmpty ? name : pick.want): not in view")
+            record(kind: kind, snapshot: s, samText: nil, candidates: [], hand: nil, extra: ["scanning": scanning, "pick": "not visible"])
+            return .failure(FindError("no_object"))
+        }
+        log("spark_pick", String(format: "%@ at %.2f, %.2f, looks like %@; %@ (%d similar)", pick.want, pick.x, pick.y,
+                                 pick.sam, pick.how, pick.similar))
+        // Look-alikes (T18: vitamin and melatonin, same yellow caps, "lower of two"): one closer look on the crop around
+        // the pick, about 1.8x, to read the labels. It says not here: the labels say none of them is it.
+        if pick.similar > 0 {
+            let near = SmallObjects.tile(around: SIMD2(pick.x, pick.y), in: s.imageSize)
+            if let crop = Self.crop(s.jpeg, to: CGRect(x: near.origin.x, y: near.origin.y, width: near.size.x, height: near.size.y), margin: 0),
+               let close = try? await MuseAgent.pick(request: userWords ?? noun, jpeg: crop, zoomed: true, label: "\(label)_close") {
+                guard id == sessionID else { return .failure(FindError("cancelled")) }
+                guard close.visible else {
+                    log("spark_pick", "closer look: not here (labels)")
+                    record(kind: kind, snapshot: s, samText: nil, candidates: [], hand: nil, extra: ["scanning": scanning, "pick": "labels: not here"])
+                    return .failure(FindError("no_object"))
+                }
+                let sam = pick.sam
+                pick = close.onPhoto(cropOrigin: near.origin, cropSize: near.size, full: s.imageSize)
+                if pick.sam.isEmpty || pick.sam == pick.want { pick.sam = sam }
+                log("spark_pick", String(format: "closer look: at %.2f, %.2f; %@", pick.x, pick.y, pick.how))
+            }
+        }
+        seenAs[name] = pick.sam
+        let p = pick.pixel(in: s.imageSize)
+        let tile = SmallObjects.tile(around: SIMD2(pick.x, pick.y), in: s.imageSize)  // 0-1, not pixels
+        let rect = CGRect(x: tile.origin.x, y: tile.origin.y, width: tile.size.x, height: tile.size.y)
+        var masks: [SourceMask] = []
+        var samText = ""
+        var chosen: Int?
+        if let jpeg = Self.crop(s.jpeg, to: rect, margin: 0) {
+            for query in pick.sam == name ? [name] : [pick.sam, name] where chosen == nil {
+                guard let text = try? await MetaAPI.segment(noun: query, jpeg: jpeg, imageLabel: "\(label)_sam").text else { continue }
+                samText = text
+                masks = SmallObjects.parseTiled(text, origins: [tile.origin], fullSize: s.imageSize)
+                    .compactMap { r in (try? r.decodeMask()).map { SourceMask(record: r, raster: $0) } }
+                chosen = SparkPick.choose(masks, at: p, near: s.imageSize.x / 20)
+                log("spark_outline", "\(query): \(masks.count) outlines, \(chosen == nil ? "none at the point" : "one at the point")")
+            }
+        }
+        guard id == sessionID else { return .failure(FindError("cancelled")) }
+        // No outline at the point (T18: the pill bottle twice): the full SAM search (map crop, tiles) on a new photo,
+        // and its outline nearest Spark's point, so the target keeps a shape for guidance and hold checks.
+        if chosen == nil, let world = Self.worldPoint(photoX: pick.x, photoY: pick.y, s),
+           case .success(let list) = await segment(noun, scanning: scanning), id == sessionID,
+           let i = FindRules.nearest(list.map(\.world), to: world) {
+            var c = list[i]
+            log("spark_outline", String(format: "full search: outline %.0f cm from the point", simd_distance(c.world, world) * 100))
+            c.info.name = name
+            c.sparkChosen = true
+            return .success([c])
+        }
+        guard id == sessionID else { return .failure(FindError("cancelled")) }
+        let mask = chosen.map { masks[$0] } ?? SparkPick.pointMask(at: p, side: max(12, s.imageSize.x / 25), imageSize: s.imageSize)
+        let camera = SIMD3(s.cameraTransform.columns.3.x, s.cameraTransform.columns.3.y, s.cameraTransform.columns.3.z)
+        guard var c = Self.candidate(mask, chosen: true, snapshot: s, camera: camera, scale: bodyScale) else {
+            log("spark_pick", "no depth at the point")
+            record(kind: kind, snapshot: s, samText: samText, candidates: [], hand: nil, extra: ["scanning": scanning, "pick": [pick.x, pick.y]])
+            return .failure(FindError("no_depth"))
+        }
+        c.info.name = name
+        c.sparkChosen = true
+        if c.recorded.reprojectsInsideMask == false { log("target_outside_mask", "id \(c.info.id)") }
+        var extra: [String: Any] = ["scanning": scanning, "pick": [pick.x, pick.y], "query": pick.sam,
+                                    "tile_origins": [[tile.origin.x, tile.origin.y]], "tile_size": [tile.size.x, tile.size.y]]
+        if let o = c.object {
+            extra["object_flat"] = o.isFlat
+            extra["object_support_y"] = o.supportHeight ?? NSNull()
+            extra["object_size_m"] = [o.size.x, o.size.y, o.size.z]
+            extra["object_centre"] = [o.centre.x, o.centre.y, o.centre.z]
+            extra["obstacle_points"] = c.obstacles?.points.count ?? 0
+        }
+        record(kind: kind, snapshot: s, samText: samText, candidates: [c.recorded], hand: nil, extra: extra)
+        return .success([c])
+    }
+
+    /// Every search photo (the lock, each scan view, the agent's find_object): Spark picks first; when it says the thing
+    /// is not in view (or gives no answer), the SAM-first search runs as before (map crop and saved-spot check, tiles,
+    /// SAM names, Spark's yes/no, rejected list), so nothing from before Spark picks is lost (Nils, 2026-11-03, T18).
+    private func findCandidates(_ noun: String, scanning: Bool = false) async -> Result<[Candidate], FindError> {
+        guard Self.sparkFirst else { return await segment(noun, scanning: scanning) }
+        let picked = await sparkSegment(noun, scanning: scanning)
+        switch picked {
+        case .success:
+            return picked
+        case .failure(let error) where !FindRules.samAfterPick(failure: error.reason):
+            return picked
+        case .failure(let error):
+            log("spark_fallback", "\(error.reason): SAM search")
+            return await segment(noun, scanning: scanning)
+        }
+    }
+
     /// SAM found something: pick it (fast path), ask Spark to choose (several), or check it (unsure).
     /// A "no" from the check goes back to scanning.
     private func decide(_ list: [Candidate], noun: String) async {
         let id = sessionID
         candidates = list
+        if let first = list.first, first.sparkChosen {
+            log("verify", "spark picked it; no second check")
+            select(first)
+            return
+        }
         if AgentTools.isAmbiguous(list.map(\.info.confidence)) {
             speaker.say("I see more than one \(noun). Checking.")
             await runAgent(prompt: "The user said: \"\(lastHeard)\". SAM found several \(noun) candidates "
@@ -828,7 +1009,7 @@ final class FindModel {
         } else {
             // Every lock is checked by Spark (v9.2, Nils after T11). Things it already rejected are skipped,
             // so the scan cannot lock the same wrong thing again and again.
-            guard let first = list.first(where: { c in !rejected.contains { simd_distance($0.world, c.world) < 0.10 } }) else {
+            guard let first = list.first(where: { c in !rejected.contains { simd_distance($0.world, c.world) < Geometry.skip } }) else {
                 log("verify", "only rejected candidates")
                 startScan(noun)
                 return
@@ -839,7 +1020,12 @@ final class FindModel {
             switch ok {
             case false?:
                 rejected.append(first)
-                if rejected.count >= Self.maxRejected {
+                // T17: the phone was rejected (c 0.72) with a second phone (c 0.53) in the same photo; the scan
+                // moved on and locked a black stand's edge. Check the others in this photo before scanning on.
+                let more = FindRules.nextCandidate(list.map(\.world), rejected: rejected.map(\.world)) != nil
+                if more, rejected.count < Self.maxRejected {
+                    await decide(list, noun: noun)
+                } else if rejected.count >= Self.maxRejected {
                     // Spark can be wrong too (Muse review): not "it isn't here", but the likeliest one, said as unsure.
                     selectBestRejected(noun)
                 } else {
@@ -893,7 +1079,9 @@ final class FindModel {
     /// and two searches steered there). Say so, forget that entry, stop steering there.
     private func checkSavedSpot(_ item: RoomItem, snapshot s: FrameSnapshot) {
         let camera = SIMD3(s.cameraTransform.columns.3.x, s.cameraTransform.columns.3.y, s.cameraTransform.columns.3.z)
-        guard simd_distance(camera, item.world) < 2, Self.inView(item.world, snapshot: s) else { return }
+        // Nothing closer than `Geometry.same` in front of the spot (T16: a thermos 5-10 cm in front of the pill bottles
+        // passed the 30 cm test, and they were forgotten while there).
+        guard simd_distance(camera, item.world) < 2, Self.inView(item.world, snapshot: s, inFront: Geometry.same) else { return }
         let misses = (spotMisses[item.name] ?? 0) + 1
         spotMisses[item.name] = misses
         log("room_spot_empty", "\(item.name) (\(misses))")
@@ -908,16 +1096,36 @@ final class FindModel {
     /// What SAM is asked for: the saved room's name for it ("vitamin" -> "vitamin bottle", or an alias from the
     /// scan), else Spark's name kept on the phone, else the user's word (2026-11-02).
     private func samQuery(_ noun: String) -> String {
-        var query = noun, why = ""
-        if let q = room.inventory?.searchName(for: noun), q != noun {
-            query = q; why = "room map"
-        } else if let q = samNames.lookup(noun)?.first, q != noun.lowercased() {
-            query = q; why = "spark"
-        }
+        let (query, why) = FindRules.samQuery(noun: noun, seenAs: seenAs[noun], broader: broader[noun],
+                                               roomName: room.inventory?.searchName(for: noun), sparkName: samNames.lookup(noun)?.first)
         if query != (lastQuery ?? noun) { log("sam_query", "\(noun) -> \(query)" + (why.isEmpty ? "" : " (\(why))")) }
         lastQuery = query
         return query
     }
+
+    /// One search's names: SAM gets `samQuery`, Spark identity prompts get `verifyPhrase`, the room
+    /// stores `canonical` (storing the user's word next to the room-scan name split one thing into two
+    /// entries and lost the mapping on the next search).
+    private func vocabulary(for noun: String) -> TargetVocabulary {
+        let query = samQuery(noun)
+        let item = room.inventory?.target(for: noun)
+        return TargetVocabulary(userPhrase: noun, samQuery: query, canonical: item?.name ?? (broader[noun] == nil ? query : noun),
+                                aliases: item?.aliases ?? [])
+    }
+
+    /// T15: "vitamin bottle" found nothing in view, so Spark asked for "bottle"; the scan steered to the saved lotion
+    /// bottle 3 m away and Spark passed it as "a bottle". A broader name than one already looked for, dropping a word
+    /// the user said, keeps the narrower one as the target: SAM looks for the broader name, Spark checks and the map
+    /// stores the narrower one.
+    private func agentIdentity(for noun: String) -> String {
+        guard let narrow = FindRules.narrowerTarget(for: noun, notFound: notFound, heard: agentHeard) else { return noun }
+        if broader[narrow] != noun {
+            broader[narrow] = noun
+            log("agent_identity", "\(noun) -> \(narrow) (SAM looks for \(noun))")
+        }
+        return narrow
+    }
+
 
     /// A word the room map does not know and Spark was never asked about: ask once (text only, effort minimal,
     /// about $0.001), in parallel with the first SAM call on the user's own word; later views use the answer.
@@ -933,13 +1141,13 @@ final class FindModel {
 
     /// A world point is in this photo, within 3.5 m, with nothing nearer in front of it (LiDAR at that pixel is not
     /// more than 30 cm closer). No depth there: not counted as in view, so nothing is dropped on a guess.
-    static func inView(_ w: SIMD3<Float>, snapshot s: FrameSnapshot) -> Bool {
+    static func inView(_ w: SIMD3<Float>, snapshot s: FrameSnapshot, inFront: Float = 0.3) -> Bool {
         let camera = SIMD3(s.cameraTransform.columns.3.x, s.cameraTransform.columns.3.y, s.cameraTransform.columns.3.z)
         let d = simd_distance(camera, w)
         guard d < 3.5, let p = RoomInventory.portraitPoint(world: w, intrinsics: s.intrinsics, cameraTransform: s.cameraTransform),
               let hit = RoomInventory.place(portrait: p, depth: s.depth, intrinsics: s.intrinsics, cameraTransform: s.cameraTransform)
         else { return false }
-        return simd_distance(camera, hit) > d - 0.3
+        return FindRules.spotInClearView(spotDistance: d, seenDistance: simd_distance(camera, hit), inFront: inFront)
     }
 
     /// The saved room has no frame (ARKit did not match): Spark lists what is in view, LiDAR places it, and
@@ -1009,7 +1217,7 @@ final class FindModel {
             let item = items[i]
             guard located else {
                 log("room_guess", "\(item.name) (no frame)")
-                say(SpokenLine(text: "It might be near the \(item.name).", interrupt: false))
+                say(SpokenLine(text: "It might be the \(item.name), or near it.", interrupt: false))
                 return
             }
             scan?.hint = item.world
@@ -1017,7 +1225,7 @@ final class FindModel {
             let o = BodyOffset(from: SIMD3(lastCamera.columns.3.x, lastCamera.columns.3.y, lastCamera.columns.3.z),
                                to: item.world, cameraTransform: lastCamera)
             log("room_guess", item.name)
-            say(SpokenLine(text: "It might be near the \(item.name), \(RoomInventory.place(o)). I'll look there first.",
+            say(SpokenLine(text: "It might be the \(item.name), or near it, \(RoomInventory.place(o)). I'll look there first.",
                            interrupt: false))
         }
     }
@@ -1051,7 +1259,7 @@ final class FindModel {
             tryAlignRoom()  // a new view: maybe enough saved things are in it now
             let id = sessionID
             Task {
-                let result = await segment(noun, scanning: true)
+                let result = await findCandidates(noun, scanning: true)
                 guard id == sessionID, phase == .searching else { return }
                 scanInFlight = false
                 switch result {
@@ -1104,7 +1312,8 @@ final class FindModel {
     /// the cup's and the tube's boxes (2026-10-30, logged as verify_box_* in api_calls.csv).
     private func verify(noun: String, candidate c: Candidate) async -> Bool? {
         guard let boxed = Self.drawBox(c.sourceJPEG, box: c.box) else { return nil }
-        return try? await MuseAgent.verify(noun: noun, jpeg: boxed, label: "verify_\(sessionID)")
+        // The identity Spark checks ("vitamin (vitamin bottle)"), not the raw word SAM was asked with.
+        return try? await MuseAgent.verify(noun: vocabulary(for: noun).verifyPhrase, jpeg: boxed, label: "verify_\(sessionID)")
     }
 
     nonisolated static func drawBox(_ jpeg: Data, box: CGRect) -> Data? {
@@ -1139,7 +1348,10 @@ final class FindModel {
         referenceCrop = c.referenceCrop
         if let name = targetName {
             lastSeen[name] = c.world
-            room.remember(name, at: c.world)
+            // The identity, with the user's own word as an alias so the next "vitamin" still finds a saved "pill bottle".
+            let vocab = vocabulary(for: name)
+            let said = TargetVocabulary.sameWords(vocab.canonical, name) ? nil : [name.lowercased()]
+            room.remember(vocab.canonical, at: c.world, aliases: said)
         }
         log("object", c.object.map { o in
             String(format: "%@ size %.0fx%.0fx%.0f cm support %@ obstacles %d", o.isFlat ? "flat" : "solid",
@@ -1173,8 +1385,9 @@ final class FindModel {
             let box = guide?.object.flatMap { Self.photoBox($0.points, s) }
             guard let marked = Self.drawMarks(s.jpeg, at: pixels, labels: marks.indices.map { "\($0 + 1)" }, box: box) else { return }
             var look: MuseAgent.LookAround?
+            let phrase = vocabulary(for: noun).verifyPhrase
             for attempt in 0..<2 where look == nil {
-                look = try? await MuseAgent.lookAround(jpeg: marked, count: marks.count, noun: noun, label: "look_\(id)_\(attempt)")
+                look = try? await MuseAgent.lookAround(jpeg: marked, count: marks.count, noun: phrase, label: "look_\(id)_\(attempt)")
             }
             guard id == sessionID, guide != nil else { return }
             guard let look else {
@@ -1198,7 +1411,9 @@ final class FindModel {
                 String(format: "%d %@%@ %.0f cm tall", i + 1, look.names[i + 1] ?? "?", look.dangerous.contains(i + 1) ? " (danger)" : "",
                        (marks[i].top - (guide?.object?.supportHeight ?? marks[i].top)) * 100)
             }.joined(separator: "; ") + " | hazards: " + (hazards.isEmpty ? "none" : hazards.joined(separator: "; ")))
-            // Another one like the target (two books): ask which one (Nils, v9.2), once per search.
+            // Another one like the target (two books): ask which one (Nils, v9.2), once per search. Nils, 2026-11-03:
+            // a same-named thing right beside the target is asked about too, never taken for the target's own edge
+            // (the T14 yellow vitamin bottle stood 7.6 cm from the green one).
             let same = marks.indices.filter { i in
                 pixels[i] != nil && (look.sameKind.contains(i + 1) || look.names[i + 1].map { Self.sameKind($0, noun) } == true)
             }
@@ -1213,16 +1428,8 @@ final class FindModel {
         }
     }
 
-    /// "Books" / "book", "key" / "green key".
-    nonisolated static func sameKind(_ a: String, _ b: String) -> Bool {
-        func norm(_ s: String) -> String {
-            var t = s.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            if t.hasSuffix("es"), t.count > 4 { t.removeLast(2) } else if t.hasSuffix("s"), t.count > 3 { t.removeLast() }
-            return t
-        }
-        let x = norm(a), y = norm(b)
-        return !x.isEmpty && !y.isEmpty && (x == y || x.hasSuffix(" " + y) || y.hasSuffix(" " + x))
-    }
+    /// "Books" / "book", "key" / "green key". Same rule as `TargetVocabulary.matches` (single source).
+    nonisolated static func sameKind(_ a: String, _ b: String) -> Bool { TargetVocabulary.sameWords(a, b) }
 
     /// Talk with the user to find out which of several like things they mean; the chosen one is guided to.
     /// Guidance is paused meanwhile. Silence keeps the one already locked.
@@ -1493,7 +1700,7 @@ final class FindModel {
             // v9.4: six names (vitamin bottle, pill bottle, medicine bottle, ...) on a view with no bottle, 79 s.
             // Two names found nothing here: it is not in this view; turn the user and look (first name, which SAM
             // gets as its search name).
-            if notFound.count >= 2, let first = notFound.first {
+            if let first = FindRules.scanInstead(notFound: notFound) {
                 log("agent_scan", "\(notFound.count) names not in view; \(noun) -> scan for \(first)")
                 targetName = first
                 startScan(first)
@@ -1501,7 +1708,7 @@ final class FindModel {
             }
             speaker.say("Looking for the \(noun).")
             agentFinds += 1
-            let result = await segment(noun)
+            let result = await findCandidates(noun)
             guard id == sessionID, phase == .locating else { return .ended }
             switch result {
             case .success(let list):
@@ -1523,20 +1730,23 @@ final class FindModel {
                 log("agent_not_found", "\(noun) \(error.reason)")
                 // Not in view but in the saved room map (Nils, 2026-11-01: "the object did get scanned and stored
                 // into the 3D map"): tell Spark where, so it turns the user there instead of searching this view.
-                if let item = room.item(for: noun) {
+                // A widened name ("bottle") points at the narrower one's spot only (T15: the lotion bottle's).
+                let meant = agentIdentity(for: noun)
+                if let item = room.item(for: meant) {
                     let hint = RoomInventory.hint(item, noun: noun, cameraTransform: lastCamera)
                     log("agent_room_hint", "\(noun) -> \(item.name)")
                     return .output(#"{"not_in_view":""# + noun + #"","room_map":""# + hint
                                    + #" Call scan_for to turn the user there.","state":"# + agentState().json() + "}")
                 }
-                if let inv = room.inventory, let item = room.savedItem(for: noun), let rel = inv.relationHint(item, noun: noun) {
+                if let inv = room.inventory, let item = room.savedItem(for: meant), let rel = inv.relationHint(item, noun: noun) {
                     log("agent_room_relation", "\(noun) -> \(item.name)")
                     return .output(#"{"not_in_view":""# + noun + #"","room_map":""# + rel
                                    + #" (no direction yet). Tell the user, then call scan_for.","state":"# + agentState().json() + "}")
                 }
                 return .output(agentState().json())
             }
-        case .scanFor(let noun):
+        case .scanFor(let said):
+            let noun = agentIdentity(for: said)
             log("agent_scan", noun)
             targetName = noun
             startScan(noun)
@@ -1549,12 +1759,13 @@ final class FindModel {
             guard let c = candidates.first(where: { $0.info.id == candidateID }) else {
                 return .output(#"{"error":"unknown candidate_id"}"#)
             }
-            if !c.info.name.isEmpty { targetName = c.info.name }
+            if !c.info.name.isEmpty { targetName = agentIdentity(for: c.info.name) }
             // Every lock is checked, the agent's choice too (Muse review of v9.2: the agent path skipped it).
             let noun = targetName ?? c.info.name
-            let ok = await verify(noun: noun, candidate: c)
+            // Spark picked it with the user's words: no yes/no on top (sparkFirst).
+            let ok = c.sparkChosen ? true : await verify(noun: noun, candidate: c)
             guard id == sessionID, phase == .locating else { return .ended }
-            log("verify", "agent \(c.info.id) -> \(ok.map { $0 ? "yes" : "no" } ?? "error")")
+            log("verify", "agent \(c.info.id) -> \(c.sparkChosen ? "spark picked it" : ok.map { $0 ? "yes" : "no" } ?? "error")")
             if ok == false {
                 rejected.append(c)
                 return .output(#"{"error":"A second look says this is not a "# + noun
@@ -1606,7 +1817,7 @@ final class FindModel {
     nonisolated static func merged(_ old: [Candidate], _ fresh: [Candidate]) -> [Candidate] {
         var all = old
         for c in fresh {
-            if let i = all.firstIndex(where: { simd_distance($0.world, c.world) < 0.05 }) {
+            if let i = all.firstIndex(where: { simd_distance($0.world, c.world) < Geometry.same }) {
                 if c.info.confidence > all[i].info.confidence { all[i] = c }
             } else {
                 all.append(c)
@@ -1679,8 +1890,9 @@ final class FindModel {
             let before = session.obstaclePointCount
             session.addScan(scan, hand: f.hand, cameraTransform: f.cameraTransform)
             // Things, not just points (Muse review): a cluttered desk seen from a new angle adds points by design.
-            if session.obstaclePointCount != before {
-                log("rolling_scan", "points \(before) -> \(session.obstaclePointCount), things \(session.obstacleClusters.count)")
+            if session.obstaclePointCount != before, let stats = session.lastScanStats {
+                log("rolling_scan", "points \(before) -> \(session.obstaclePointCount), things \(session.obstacleClusterCount) "
+                    + "(scan \(stats.scanned) kept \(stats.kept) added \(stats.added))")
             }
         }
         let out = session.update(time: f.time, hand: f.hand, cameraTransform: f.cameraTransform,
@@ -1751,12 +1963,12 @@ final class FindModel {
 
     private func startMapping() {
         beginSession(name: nil)
+        mapFinish = FindRules.RoomScanFinish()
         var planner = ScanPlanner(time: lastFrameTime)
         planner.budget = 12
         planner.minNewAngle = 30 * .pi / 180
         mapPlanner = planner
         mapInventory = RoomInventory(created: Date())
-        mapInFlight = 0
         mapViews = 0
         phase = .mapping
         log("map_start", "")
@@ -1769,6 +1981,10 @@ final class FindModel {
         let step = planner.update(time: f.time, cameraTransform: f.cameraTransform, busy: mapInFlight >= 2,
                                   speaking: speaker.isSpeaking)
         mapPlanner = planner
+        if mapFinish.tapped {
+            if mapInFlight == 0 { finishMapping(early: true) }
+            return
+        }
         // Ends by itself after a full circle (Nils, 2026-11-01); waits for views still being listed.
         if planner.mappingDone {
             if mapInFlight == 0 { finishMapping(early: false) }
@@ -1783,11 +1999,11 @@ final class FindModel {
             if mapInFlight == 0 { finishMapping(early: false) }
         case .scan:
             tones.click()
-            mapInFlight += 1
+            mapFinish.viewSent()
             mapViews += 1
             let id = sessionID, view = mapViews
             Task {
-                defer { if id == sessionID { mapInFlight -= 1 } }
+                defer { if id == sessionID { _ = mapFinish.viewDone() } }  // the next frame saves if tapped
                 guard let s = await snapshot(), id == sessionID, phase == .mapping else { return }
                 guard let reply = try? await MuseAgent.listObjects(jpeg: s.jpeg, label: "room_\(id)_\(view)") else {
                     log("map_view_fail", "\(view)")
@@ -1813,7 +2029,9 @@ final class FindModel {
     private func finishMapping(early: Bool) {
         let id = sessionID
         let inventory = mapInventory
+        let announced = mapFinish.tapped  // "Saving the room. One moment." was said already
         mapPlanner = nil
+        mapFinish = FindRules.RoomScanFinish()
         phase = .idle
         log("map_finish", "\(mapViews) views, \(inventory.items.count) items" + (early ? " (tap)" : " (auto)"))
         guard !inventory.items.isEmpty else {
@@ -1821,7 +2039,7 @@ final class FindModel {
             say(SpokenLine(text: "I didn't find anything to remember. Try again with more light.", interrupt: true))
             return
         }
-        say(SpokenLine(text: early ? "Saving the room." : "Done. You can stop turning. Saving the room.", interrupt: true))
+        if !announced { say(SpokenLine(text: early ? "Saving the room." : "Done. You can stop turning. Saving the room.", interrupt: true)) }
         session.getCurrentWorldMap { map, error in
             nonisolated(unsafe) let map = map  // handed to the main actor once, never shared
             let message = error?.localizedDescription
@@ -1882,7 +2100,7 @@ final class FindModel {
             tones.earcon(.success)
             // It is in the user's hand now: not at the spot where it was found (v5: stale hints).
             if let name = targetName {
-                room.carried(name, from: target)
+                room.carried(vocabulary(for: name).canonical, from: target)
                 lastSeen[name] = nil
             }
         } else {

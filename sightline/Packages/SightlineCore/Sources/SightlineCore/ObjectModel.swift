@@ -203,7 +203,7 @@ public struct GraspAssessment: Sendable, Equatable {
     /// Before v6: palm over the footprint and two tips, or one tip plus the palm within 7 cm.
     public var touching: Bool { tipsNear >= 1 }
 
-    public static let touchDistance: Float = 0.03
+    public static let touchDistance: Float = Geometry.touch
 
     /// Provisional geometric hold candidate. This alone never confirms possession.
     /// Nils, 2026-10-29: being next to the hand is not enough. Held = the thumb tip and at least one

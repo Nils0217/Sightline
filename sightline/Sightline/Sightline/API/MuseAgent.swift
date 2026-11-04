@@ -65,6 +65,28 @@ nonisolated enum MuseAgent {
                         + "Answer with one word: yes or no.", noun: noun, jpeg: jpeg, label: label)
     }
 
+    /// Spark picks the target (2026-11-03, after T17): the thing the user means, pointed at on the photo, with a
+    /// name SAM can outline. Effort medium: choosing between look-alikes is the hard part.
+    /// `zoomed`: a close crop around the first pick, to read labels between look-alikes (T18: vitamin vs melatonin).
+    static func pick(request: String, jpeg: Data, zoomed: Bool = false, label: String) async throws -> SparkPick? {
+        let text = try await reply((zoomed ? "This is a close crop of a blind user's chest-camera photo. Read the labels and "
+                                    + "printed words on the things in it. " : "This photo is from a blind user's chest camera. ")
+                                   + "They said: \"\(request)\". "
+                                   + "Find the one thing they want in this photo. Read labels and printed words when "
+                                   + "similar things are there: a melatonin bottle is not a vitamin bottle. If several could "
+                                   + "be it, choose the one that best fits their words; if their words do not tell them apart, "
+                                   + "choose the nearest. "
+                                   + "Only point at it if you are sure that is what it is; a thing of a similar shape or "
+                                   + "colour is not it. x and y are the centre of its visible part, from 0 to 1 (x left to "
+                                   + "right, y top to bottom). sam is one or two words for what it looks like (\"pill bottle\"). "
+                                   + "how says, in a few words, how it differs from similar things in the photo. "
+                                   + "similar is how many other things in the photo look like it. "
+                                   + #"Answer only with JSON: {"want":"phone","visible":true,"x":0.42,"y":0.61,"sam":"phone","how":"grey, left of the black one","similar":1} "#
+                                   + #"or, if it is not in the photo, {"want":"phone","visible":false}."#,
+                                   noun: "pick", images: [jpeg], effort: .medium, timeout: 30, label: label)
+        return SparkPick.parse(text)
+    }
+
     /// Identity only. Geometry and shared movement are evaluated independently on the device.
     static func verifyObjectIdentity(noun: String, jpeg: Data, reference: Data, label: String) async throws -> Bool? {
         try await yesNo("The user asked for their \(noun). Image 1 is the reference object. "
@@ -121,12 +143,14 @@ nonisolated enum MuseAgent {
     /// The object is not in the room map: which mapped item is it most likely near? Returns the item's
     /// number in `items` (RoomInventory.describe), nil = no idea. Effort medium (reasoning, once per search).
     static func guessNear(noun: String, items: String, label: String) async throws -> Int? {
-        let text = try await reply("A blind user is looking for their \(noun). It is not in view and was never seen in "
-                                   + "this room. These things were seen in the room (number. name: where it is, what it "
-                                   + "stands on and what is next to it):\n\(items)\nWhere is a \(noun) most likely to be? Answer only with the "
-                                   + "number of the one thing it is most likely on, in or next to, or 'none' if no "
-                                   + "item makes it likely.",
-                                   noun: noun, images: [], effort: .medium, label: label)
+        // T18: "supplement" got "none" with a pill bottle and a medicine bottle saved: the question only asked for a place.
+        let text = try await reply("A blind user is looking for their \(noun). It is not in view, and nothing saved has that "
+                                   + "exact name. These things were seen in the room (number. name: where it is, what it "
+                                   + "stands on and what is next to it):\n\(items)\nFirst: is one of them very likely the \(noun) "
+                                   + "itself under another name (a supplement is often a pill bottle; a drink, a water bottle)? "
+                                   + "Else: which one is it most likely on, in or next to? Answer only with the number of that "
+                                   + "one thing, or 'none' if no item makes it likely.",
+                                   noun: noun, images: [], effort: .minimal, label: label)  // T18: medium took 20 s
         return AgentText.firstInteger(text)
     }
 
@@ -157,7 +181,7 @@ nonisolated enum MuseAgent {
                         + "(\"aliases\": a vitamin bottle is also \"vitamins\", \"supplements\"). Answer only with JSON: "
                         + #"{"objects":[{"name":"cup","x":0.42,"y":0.61,"on":"desk","aliases":["mug","coffee"]},"#
                         + #"{"name":"desk","x":0.5,"y":0.8,"fixed":true}]}"#,
-                        noun: "room_scan", images: [jpeg], effort: .medium, label: label)
+                        noun: "room_scan", images: [jpeg], effort: .medium, timeout: 45, label: label)
     }
 
     /// What one look at the photo around the target says (v9.2): names for the numbered marks, which of them
@@ -254,7 +278,9 @@ nonisolated enum MuseAgent {
     }
 
     /// One plain Spark turn (no tools), logged. Returns "" on a non-200 answer.
-    private static func reply(_ prompt: String, noun: String, images: [Data], effort: Effort, label: String) async throws -> String {
+    /// `timeout`: T19, a room view (medium, about 2,700 output tokens) took 19.8 s and the one before hit the 20 s limit.
+    private static func reply(_ prompt: String, noun: String, images: [Data], effort: Effort, timeout: TimeInterval = 20,
+                              label: String) async throws -> String {
         guard let key = APIKey.value else { throw MetaAPIError.missingKey }
         let body: [String: Any] = [
             "model": model,
@@ -267,9 +293,17 @@ nonisolated enum MuseAgent {
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        request.timeoutInterval = 20
+        request.timeoutInterval = timeout
         let start = Date()
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data, response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            // Failed calls are logged too (T19: a timed-out room view left no row).
+            ApiCallLog.append(image: label + "_failed", model: "\(model)/\(effort.rawValue)", noun: noun,
+                              latencyMS: Date().timeIntervalSince(start) * 1000, cost: 0, inputTokens: 0, outputTokens: 0)
+            throw error
+        }
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
         let usage = json["usage"] as? [String: Any]
         let inTok = usage?["input_tokens"] as? Int ?? 0, outTok = usage?["output_tokens"] as? Int ?? 0

@@ -310,4 +310,32 @@ import Testing
         #expect(o.map(\.fixed) == [true, false])
         #expect(o[1].on == "desk" && o[0].on == nil)
     }
+
+    /// Review of the vocabulary change (2026-11-03): a find is saved under its identity ("pill bottle", Spark's name)
+    /// with the user's word as an alias, so the next "vitamin" still gets that saved spot.
+    @Test func aFindSavedUnderItsIdentityIsFoundByTheUsersWord() {
+        var inv = room()
+        inv.remember("pill bottle", at: SIMD3(1, 0, -1), date: t0, source: "found", aliases: ["vitamin"])
+        #expect(inv.target(for: "vitamin")?.name == "pill bottle")
+        var bare = room()
+        bare.remember("pill bottle", at: SIMD3(1, 0, -1), date: t0, source: "found")
+        #expect(bare.target(for: "vitamin") == nil)  // without the alias the map lost it
+    }
+
+    /// One search's names: SAM gets the visible name, Spark verifies the user phrase with it, the
+    /// map stores the identity, and obstacle names match against all of them.
+    @Test func vocabularyVerifyPhraseAndMatches() {
+        let v = TargetVocabulary(userPhrase: "vitamin", samQuery: "vitamin bottle",
+                                 canonical: "vitamin bottle", aliases: ["vitamins", "supplements"])
+        #expect(v.verifyPhrase == "vitamin (vitamin bottle)")
+        #expect(v.matches("vitamin bottle"))
+        #expect(v.matches("supplements"))
+        #expect(v.matches("vitamin"))
+        #expect(!v.matches("water bottle"))
+        let plain = TargetVocabulary(userPhrase: "keys", samQuery: "keys", canonical: "keys")
+        #expect(plain.verifyPhrase == "keys")
+        #expect(plain.matches("key"))
+        #expect(TargetVocabulary.sameWords("green key", "key"))
+        #expect(!TargetVocabulary.sameWords("key", "keyboard"))
+    }
 }

@@ -72,18 +72,24 @@ import Testing
 
     /// The hand stays put while "Keep going" repeats: they may already hold it (hidden while gripping).
     /// v9.2 (Nils): look again with one check photo, which also sees whether it is still at its spot.
+    /// T20: a hand that never came near the object and stops 20 cm short is first told something is in the way
+    /// (with a way past it); only a second stall checks (sim grab_unasked: it may have been taken unseen).
     @Test func stalledHandIsCheckedOnce() {
         var s = GuidanceSession(targetName: "phone", target: object.centre, object: object, cameraTransform: downCamera, time: 0)
         let stuck = object.centre + SIMD3(0.2, 0.05, 0)
         var t = 0.0
         var reasons: [String] = []
+        var said: [String] = []
         for i in 0..<1200 {  // 40 s, the hand creeping 1 mm per frame for 0.2 s after each cue, then stopping
             t += 1.0 / 30
             let p = stuck + SIMD3(Float(i % 90 < 6 ? -0.001 * Double(i % 90) : 0), 0, 0)
             let out = s.update(time: t, hand: hand(p), cameraTransform: downCamera, targetDepthDelta: 0, speaking: false)
             if out.requestCheck { reasons.append(out.checkReason ?? "") }
+            said += out.lines.map(\.text)
         }
         #expect(reasons == ["stalled"])
+        let blocked = said.firstIndex { $0.contains("in the way.") }, checking = said.firstIndex(of: "Checking.")
+        #expect(blocked != nil && (checking == nil || blocked! < checking!), "\(said)")
     }
 
     /// The spot going empty (LiDAR now sees the table where a 10 cm box stood) checks, with no hand seen.
@@ -184,6 +190,82 @@ import Testing
         }
         #expect(said.filter { $0.1 == "I can't see it. Hold it in front of the phone." }.count == 1, "\(said)")
         #expect(abs((checkAt ?? 0) - 6) < 0.1, "\(String(describing: checkAt))")
+    }
+
+    /// T11: unsure, then the hand leaves the view and the user never double taps: guide again
+    /// after 2 s instead of stalling silently in grabbing until `giveUpAfterGrab`.
+    @Test func unsureThenHandGoneGuidesAgain() {
+        var s = GuidanceSession(targetName: "phone", target: object.centre, object: object, cameraTransform: downCamera, time: 0)
+        s.beginManualCheck()
+        _ = s.resolveCheck(nil, time: 0)  // "Hold it up", look due at 3 s
+        var t = 0.0
+        let near = object.centre + SIMD3(0, 0.015, 0)
+        var sawCheck = false
+        for _ in 0..<150 {  // hand in view: the held-up look fires
+            t += 1.0 / 30
+            let out = s.update(time: t, hand: hand(near), cameraTransform: downCamera, targetDepthDelta: 0, speaking: false)
+            if out.requestCheck {
+                sawCheck = true
+                _ = s.resolveCheck(nil, time: t)  // still unsure: held-up done, describe requested
+                _ = s.takeDescribeRequest()
+                break
+            }
+        }
+        #expect(sawCheck)
+        var guidedAt: Double?
+        var said: [String] = []
+        for _ in 0..<240 {  // hand gone, user does nothing
+            t += 1.0 / 30
+            let out = s.update(time: t, hand: nil, cameraTransform: downCamera, targetDepthDelta: 0, speaking: false)
+            said += out.lines.map(\.text)
+            if out.phase == .guiding, guidedAt == nil { guidedAt = t }
+        }
+        #expect(guidedAt != nil && guidedAt! < 7, "\(String(describing: guidedAt))")
+        #expect(said.contains("I can't see your hand."), "\(said)")
+    }
+
+    /// Unsure, the hand stays on the object for seconds, then one frame drops the hand: still grabbing
+    /// (the 2 s run from when the hand left, not from the unsure line).
+    @Test func unsureThenOneDroppedHandFrameKeepsGrabbing() {
+        var s = GuidanceSession(targetName: "phone", target: object.centre, object: object, cameraTransform: downCamera, time: 0)
+        s.beginManualCheck()
+        _ = s.resolveCheck(nil, time: 0)
+        var t = 0.0
+        let near = object.centre + SIMD3(0, 0.015, 0)
+        var unsureAt: Double?
+        for _ in 0..<150 {
+            t += 1.0 / 30
+            let out = s.update(time: t, hand: hand(near), cameraTransform: downCamera, targetDepthDelta: 0, speaking: false)
+            if out.requestCheck {
+                _ = s.resolveCheck(nil, time: t)
+                _ = s.takeDescribeRequest()
+                unsureAt = t
+                break
+            }
+        }
+        #expect(unsureAt != nil)
+        var phases: [GuidanceSession.Phase] = []
+        for i in 0..<120 {  // 4 s on the object, one dropped frame at 3 s
+            t += 1.0 / 30
+            let out = s.update(time: t, hand: i == 90 ? nil : hand(near), cameraTransform: downCamera,
+                               targetDepthDelta: 0, speaking: false)
+            phases.append(out.phase)
+        }
+        #expect(!phases.contains(.guiding), "\(phases)")
+    }
+
+    /// A same-named cluster at the target is its own unmasked edge: suppressing drops its name and
+    /// points, so it is neither announced ("A book is ahead") nor asked about.
+    @Test func suppressObstacleDropsItsNameAndPoints() {
+        let centre = SIMD3<Float>(0.06, 0.02, -0.5)
+        let pts = (0..<5).map { centre + SIMD3(0.005 * Float($0), 0, 0) }
+        var s = GuidanceSession(targetName: "book", target: object.centre, object: object,
+                                obstacles: ObstacleMap(points: pts), cameraTransform: downCamera, time: 0)
+        s.nameObstacles([(centre: centre, name: "book")])
+        #expect(s.obstaclePointCount == 5 && s.obstacleClusterCount == 1)
+        s.suppressObstacle(at: centre)
+        #expect(s.obstaclePointCount == 0)
+        #expect(s.obstacleClusterCount == 0)
     }
 
     /// An asked check that sees it in the hand answers the question.
