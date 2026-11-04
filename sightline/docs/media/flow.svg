@@ -1,0 +1,134 @@
+<!-- labels: demo, needs-review -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c9d1d9"/>
+    </marker>
+    <marker id="ad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8b949e"/>
+    </marker>
+    <style>
+      text { font-family: -apple-system, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      .title { font-size: 52px; font-weight: 700; fill: #f0f6fc; }
+      .sub { font-size: 26px; fill: #8b949e; }
+      .lane { font-size: 22px; font-weight: 700; letter-spacing: 3px; }
+      .h { font-size: 28px; font-weight: 700; fill: #f0f6fc; }
+      .tag { font-size: 19px; font-weight: 700; }
+      .b { font-size: 21px; fill: #c9d1d9; }
+      .q { font-size: 21px; fill: #f0f6fc; font-style: italic; }
+      .n { font-size: 22px; font-weight: 800; fill: #0d1117; }
+      .note { font-size: 22px; fill: #8b949e; }
+      .arrow { stroke: #c9d1d9; stroke-width: 3.5; fill: none; marker-end: url(#a); }
+      .dash { stroke: #8b949e; stroke-width: 3; fill: none; stroke-dasharray: 9 8; marker-end: url(#ad); }
+    </style>
+  </defs>
+
+  <rect width="1920" height="1080" fill="#0d1117"/>
+
+  <text x="80" y="105" class="title">Sightline: say what you want, and your hand is guided to it</text>
+  <text x="80" y="150" class="sub">Built from scratch at the Meta Global AI Developer Hackathon, Oct 26 – Nov 4, 2026</text>
+
+  <!-- lanes -->
+  <rect x="330" y="200" width="1540" height="330" rx="22" fill="#0b2a4a" fill-opacity="0.55" stroke="#1f6feb" stroke-opacity="0.6" stroke-width="2"/>
+  <text x="360" y="240" class="lane" fill="#58a6ff">META MODEL API · CLOUD · UNDERSTANDS AND DECIDES</text>
+  <rect x="330" y="580" width="1540" height="330" rx="22" fill="#0f2e1d" fill-opacity="0.55" stroke="#2ea043" stroke-opacity="0.6" stroke-width="2"/>
+  <text x="360" y="620" class="lane" fill="#3fb950">ON THE IPHONE · REAL TIME</text>
+
+  <!-- 0 user -->
+  <rect x="60" y="420" width="230" height="270" rx="18" fill="#161b22" stroke="#f0f6fc" stroke-width="2.5"/>
+  <text x="175" y="475" class="h" text-anchor="middle">You</text>
+  <text x="175" y="515" class="b" text-anchor="middle">iPhone on</text>
+  <text x="175" y="543" class="b" text-anchor="middle">your chest</text>
+  <text x="175" y="600" class="q" text-anchor="middle">"Find my</text>
+  <text x="175" y="628" class="q" text-anchor="middle">water bottle."</text>
+
+  <!-- 1 transcribe -->
+  <g transform="translate(360,265)">
+    <rect width="320" height="235" rx="16" fill="#161b22" stroke="#58a6ff" stroke-width="2.5"/>
+    <circle cx="34" cy="36" r="18" fill="#58a6ff"/><text x="34" y="44" class="n" text-anchor="middle">1</text>
+    <text x="64" y="45" class="h">Hear</text>
+    <text x="22" y="90" class="tag" fill="#58a6ff">MUSE VOICE TRANSCRIBE</text>
+    <text x="22" y="130" class="b">Streams your words and</text>
+    <text x="22" y="158" class="b">knows when you are done</text>
+    <text x="22" y="196" class="note">Apple Speech as fallback</text>
+  </g>
+
+  <!-- 2 spark decide -->
+  <g transform="translate(720,265)">
+    <rect width="360" height="235" rx="16" fill="#161b22" stroke="#58a6ff" stroke-width="2.5"/>
+    <circle cx="34" cy="36" r="18" fill="#58a6ff"/><text x="34" y="44" class="n" text-anchor="middle">2</text>
+    <text x="64" y="45" class="h">Understand and ask</text>
+    <text x="22" y="90" class="tag" fill="#58a6ff">MUSE SPARK</text>
+    <text x="22" y="130" class="b">Looks at the camera view,</text>
+    <text x="22" y="158" class="b">sees two bottles, and asks:</text>
+    <text x="22" y="196" class="q">"The white one on the left,</text>
+    <text x="22" y="222" class="q">or the black one on the right?"</text>
+  </g>
+
+  <!-- 3 sam -->
+  <g transform="translate(1120,265)">
+    <rect width="320" height="235" rx="16" fill="#161b22" stroke="#58a6ff" stroke-width="2.5"/>
+    <circle cx="34" cy="36" r="18" fill="#58a6ff"/><text x="34" y="44" class="n" text-anchor="middle">3</text>
+    <text x="64" y="45" class="h">Outline</text>
+    <text x="22" y="90" class="tag" fill="#58a6ff">SAM 3.1</text>
+    <text x="22" y="130" class="b">Segments the chosen</text>
+    <text x="22" y="158" class="b">bottle at Spark's point</text>
+  </g>
+
+  <!-- 7 spark check -->
+  <g transform="translate(1480,265)">
+    <rect width="360" height="235" rx="16" fill="#161b22" stroke="#58a6ff" stroke-width="2.5"/>
+    <circle cx="34" cy="36" r="18" fill="#58a6ff"/><text x="34" y="44" class="n" text-anchor="middle">7</text>
+    <text x="64" y="45" class="h">Check what you hold</text>
+    <text x="22" y="90" class="tag" fill="#58a6ff">MUSE SPARK + SAM 3.1</text>
+    <text x="22" y="130" class="b">Is it the same bottle?</text>
+    <text x="22" y="174" class="q">"Got it. You have</text>
+    <text x="22" y="200" class="q">the water bottle."</text>
+  </g>
+
+  <!-- room memory -->
+  <g transform="translate(720,645)">
+    <rect width="360" height="235" rx="16" fill="#161b22" stroke="#3fb950" stroke-width="2.5" stroke-dasharray="10 7"/>
+    <text x="22" y="45" class="h">Room memory</text>
+    <text x="22" y="90" class="tag" fill="#3fb950">SAVED ROOM SCAN</text>
+    <text x="22" y="130" class="b">Where each thing was and</text>
+    <text x="22" y="158" class="b">how it looks; used only when</text>
+    <text x="22" y="186" class="b">the thing is not in view</text>
+  </g>
+
+  <!-- 4 lidar -->
+  <g transform="translate(1120,645)">
+    <rect width="320" height="235" rx="16" fill="#161b22" stroke="#3fb950" stroke-width="2.5"/>
+    <circle cx="34" cy="36" r="18" fill="#3fb950"/><text x="34" y="44" class="n" text-anchor="middle">4</text>
+    <text x="64" y="45" class="h">Place in 3D</text>
+    <text x="22" y="90" class="tag" fill="#3fb950">ARKIT + LIDAR</text>
+    <text x="22" y="130" class="b">Bottle's shape and position,</text>
+    <text x="22" y="158" class="b">obstacles on the way</text>
+  </g>
+
+  <!-- 5-6 guidance -->
+  <g transform="translate(1480,645)">
+    <rect width="360" height="235" rx="16" fill="#161b22" stroke="#3fb950" stroke-width="2.5"/>
+    <circle cx="34" cy="36" r="18" fill="#3fb950"/><text x="34" y="44" class="n" text-anchor="middle">5</text>
+    <text x="64" y="45" class="h">Guide your hand</text>
+    <text x="22" y="90" class="tag" fill="#3fb950">HAND POSE · VOICE · TONES</text>
+    <text x="22" y="130" class="b">Fingertip tracked 30 times/s</text>
+    <text x="22" y="174" class="q">"Right. Forward."</text>
+    <text x="22" y="202" class="q">"Stop. Something's in the way."</text>
+  </g>
+
+  <!-- arrows -->
+  <path class="arrow" d="M290,500 C320,470 330,420 356,400"/>
+  <path class="arrow" d="M680,382 L716,382"/>
+  <path class="arrow" d="M1080,382 L1116,382"/>
+  <path class="arrow" d="M1280,500 L1280,641"/>
+  <path class="arrow" d="M1440,762 L1476,762"/>
+  <path class="arrow" d="M1660,645 L1660,504"/>
+  <text x="1678" y="562" class="b">6  you pick it up</text>
+  <path class="dash" d="M900,645 L900,504"/>
+  <text x="915" y="562" class="note">not in view</text>
+
+  <text x="80" y="965" class="note">Three Meta models via the Meta Model API: Muse Voice Transcribe, Muse Spark (muse-spark-1.3), SAM 3.1.</text>
+  <text x="80" y="1003" class="note">Everything in green runs on the phone (iOS built-ins) and never waits on the network.</text>
+  <text x="80" y="1041" class="note">Indoor, within arm's reach. Does not replace a cane or guide dog.</text>
+</svg>

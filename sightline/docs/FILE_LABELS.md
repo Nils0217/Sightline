@@ -48,6 +48,10 @@ A file can carry several labels. When a label changes (e.g. `needs-review` → `
 | `docs/G2_PLAN.md` | important, testing, verified | G2 mask → 3D target plan; gate passed 2026-10-28 |
 | `docs/G3_PLAN.md` | important, testing, needs-review | G3 world-map relocalization plan and run steps |
 | `docs/FIND_TEST.md` | important, testing, needs-review | v9.1 device test: data files (incl. bursts), gestures, steps, what to note |
+| `../README.md` | important | Repo front page for judges: video link, architecture, pointer to `sightline/` |
+| `../.gitignore` | config | Keeps demo video files (`*.mp4`, `*.mov`) out of the repo |
+| `docs/media/flow.svg` | demo, needs-review | Flow diagram for the demo video (source) |
+| `docs/media/flow.png` | demo, needs-review | Flow diagram rendered at 1920x1080 for the video |
 | `docs/TEST_LOG.md` | important, testing, reference | Every device test: issue → root cause → solution → status, timestamped |
 | `docs/ARKIT_SAMPLE.md` | testing, reference | How to run Apple's ARKit sample on the iPhone (S0.1) |
 | `docs/assets/g1_marker_print.pdf` | testing, generated | Printable 10 cm G1 marker |

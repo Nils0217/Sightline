@@ -5,6 +5,8 @@
 
 Sightline is an indoor find-and-grab aid for blind and low-vision people. Say what you want; Sightline finds it with the chest-mounted iPhone and talks your hand to it ("Right, 20 centimetres." "Stop. The bottle is at your fingers."), then checks that you picked up the right thing.
 
+**Demo video:** https://youtube.com/shorts/6mhpoczOCzY · Architecture diagram: [`docs/media/flow.png`](docs/media/flow.png)
+
 ## How to use it
 
 1. Secure the iPhone on your chest. The first time, hold your hand out comfortably and **press and hold** the screen: Sightline measures your reach and hand size and remembers them; distance thresholds scale to your body.

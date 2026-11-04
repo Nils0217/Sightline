@@ -1,1 +1,6 @@
 .DS_Store
+# labels: config
+# Demo video recordings: the video is on YouTube, not in the repo.
+*.mp4
+*.mov
+*.m4v
