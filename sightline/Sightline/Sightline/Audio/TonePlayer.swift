@@ -44,9 +44,10 @@ final class TonePlayer {
         if !engine.isRunning { start() }
     }
 
-    /// nil = silent.
-    func update(distance: Float?) {
-        state.set(distance: distance)
+    /// nil = silent. `ducked`: the voice is speaking; the beeps go to a quarter volume so they do not cover the words
+    /// (T22: "the voice is easily cut by the beep").
+    func update(distance: Float?, ducked: Bool = false) {
+        state.set(distance: distance, ducked: ducked)
         if distance != nil, !engine.isRunning { start() }
     }
 
@@ -88,6 +89,7 @@ final class TonePlayer {
 private nonisolated final class ToneState: @unchecked Sendable {
     private let lock = NSLock()
     private var distance: Float?
+    private var ducked = false
     private var phase: Double = 0
     private var sinceBeep: Double = 1
     /// Fixed notes to play (clicks, earcons), each (Hz, seconds left); 0 Hz = pause.
@@ -96,12 +98,13 @@ private nonisolated final class ToneState: @unchecked Sendable {
 
     static let beepLength = 0.05
 
-    func set(distance: Float?) { lock.withLock { self.distance = distance } }
+    func set(distance: Float?, ducked: Bool = false) { lock.withLock { self.distance = distance; self.ducked = ducked } }
     func play(_ n: [(hz: Double, seconds: Double)]) { lock.withLock { notes = n; generation += 1 } }
 
     func render(frameCount: Int, sampleRate: Double, buffers: UnsafeMutableAudioBufferListPointer) {
         // Notes span several buffers: copy them, render, and keep what is left.
-        let (d, queued, gen) = lock.withLock { (distance, notes, generation) }
+        let (d, queued, gen, quiet) = lock.withLock { (distance, notes, generation, ducked) }
+        let beepVolume: Float = quiet ? 0.03 : 0.12
         var pending = queued
         let interval = d.flatMap { ProximityTone.interval(distance: $0) }
         let freq = d.map { ProximityTone.frequency(distance: $0) } ?? 0
@@ -114,7 +117,7 @@ private nonisolated final class ToneState: @unchecked Sendable {
                 if sinceBeep < Self.beepLength {
                     phase += 2 * .pi * freq * dt
                     if phase > 2 * .pi { phase -= 2 * .pi }
-                    sample = Float(sin(phase)) * 0.12
+                    sample = Float(sin(phase)) * beepVolume
                 }
             }
             if !pending.isEmpty {

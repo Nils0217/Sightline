@@ -92,6 +92,57 @@ def check(log, api):
             if made < 2:
                 hit("T18.11", r, "describe limit hit after %d description(s) in this search" % made)
 
+        # T21: the room hint sent the user to a saved thing more than 60 cm away (out of reach) while another saved
+        # entry with the name was nearer (the app now picks the nearer one; a hit means it did not).
+        m = re.search(r"Your .+? was last seen .*?about (\d+(?:\.\d+)?) (centimetres|metres?) away", d) if e == "say" else None
+        if m:
+            cm = float(m.group(1)) * (1 if m.group(2).startswith("centi") else 100)
+            chosen = any(b.get("event") == "which_saved_choice" for b in same)
+            if cm > 60 and not chosen:
+                hit("T21", r, "room hint to a thing %.0f cm away: check for a nearer one with the name" % cm)
+
+        # T21 row 2: the which-one question about saved things got no clear answer; the nearer one was taken.
+        if e == "which_saved_choice" and d.endswith("(no answer)"):
+            hit("T21.2", r, "no clear answer to which saved one; took " + d)
+
+        # T22: the output went to the earpiece while a line was being said (route change after a listen).
+        if e == "audio_route" and "Receiver" in d:
+            talking = [b for b in same if b.get("event") == "speech_start" and r["t"] - b["t"] <= 1.5]
+            if talking:
+                hit("T22", r, "voice moved to the earpiece during: " + talking[-1]["detail"][:60])
+
+        # T22: "my" in a spoken name ("Your my phone was last seen").
+        if e == "say" and re.search(r"\b(Your|The|the) my\b", d):
+            hit("T22", r, "'my' in the name: " + d[:60])
+
+        # T23: Spark's pick said "not in view" and SAM's crop at the saved spot then found it (the pick was waited for).
+        if e == "sam_map_crop" and "found at the map spot" in d:
+            prev = [b for b in same if b.get("event") == "spark_pick" and r["t"] - b["t"] <= 3]
+            if prev and prev[-1]["detail"].endswith("not in view"):
+                hit("T23", r, "Spark said not in view, the saved spot had it (the pick, 5-9 s, was waited for)")
+
+        # T24: the agent kept going after Spark had picked the target (142 s to the lock).
+        if e == "agent_tool" and not d.startswith("select_target"):
+            picked = [b for b in same if b.get("event") == "spark_pick" and not b["detail"].endswith("not in view")]
+            locked = any(b.get("event") == "target" for b in same)
+            if picked and not locked:
+                hit("T24", r, "agent turn after Spark picked it: " + d[:60])
+
+        # T24: the phone is slow (frames processed under 5 per second or over 100 ms each) or hot.
+        if e == "perf":
+            m = re.match(r"([\d.]+) fps, (\d+) ms mean", d)
+            if m and (float(m.group(1)) < 5 or int(m.group(2)) > 100):
+                hit("T24", r, "slow frames: " + d)
+        if e == "thermal" and "bursts off" in d:
+            hit("T24", r, "phone hot: " + d)
+
+        # T25: like things in view and Spark's choice taken before the user was asked which one.
+        if e == "which_one" and re.search(r"-> (A|\d+)$", d):
+            asked = any(b.get("event") in ("which_heard", "which_saved_choice") for b in same)
+            refused = any(x.get("event") == "which_one" and "chose before asking" in x.get("detail", "") for x in log[i + 1:i + 2])
+            if not asked and not refused:
+                hit("T25", r, "chose which one without asking: " + d[:60])
+
         # sim "loop": the same line 3+ times in 10 s.
         if e == "say":
             again = [b for b in same if b.get("event") == "say" and b.get("detail") == d and r["t"] - b["t"] <= 10]

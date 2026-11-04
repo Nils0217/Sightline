@@ -26,6 +26,55 @@ import Testing
         #expect(inv.match("phone")?.world == SIMD3(2, 0, -2))
     }
 
+    /// T21: the room scan saved two water bottles (on the nightstand 27 cm away, and on the floor 1.9 m away, the
+    /// newer); "I need some water" was guided to the far one. The nearer one is meant; the same bottle seen twice
+    /// (closer than 25 cm) still takes the newer entry.
+    @Test func t21TheNearerOfTwoSameNamedThingsIsMeant() {
+        var inv = RoomInventory(created: t0)
+        inv.remember("water bottle", at: [0.13, -0.32, -0.27], date: t0, source: "room_scan")
+        inv.remember("water bottle", at: [0.33, -0.35, 1.61], date: t0.addingTimeInterval(49), source: "room_scan")
+        let camera = SIMD3<Float>(0, 0, 0)
+        #expect(inv.target(for: "water bottle", near: camera)?.world == SIMD3(0.13, -0.32, -0.27))
+        #expect(inv.match("bottle", near: camera)?.world == SIMD3(0.13, -0.32, -0.27))
+        #expect(inv.target(for: "water bottle")?.world == SIMD3(0.33, -0.35, 1.61))  // no camera: newest, as before
+        var twice = RoomInventory(created: t0)
+        twice.remember("cup", at: [0, 0, -0.5], date: t0, source: "room_scan")
+        twice.remember("cup", at: [0.1, 0, -0.6], date: t0.addingTimeInterval(10), source: "room_scan")
+        #expect(twice.match("cup", near: camera)?.world == SIMD3(0.1, 0, -0.6))
+    }
+
+    /// T21: both saved water bottles are options; "bottle" also offers the vitamin bottle; each is said by where it is.
+    @Test func t21EverySavedThingTheWordFitsIsAnOption() {
+        var inv = RoomInventory(created: t0)
+        inv.remember("water bottle", at: [0.13, -0.32, -0.27], date: t0, source: "room_scan", on: "nightstand")
+        inv.remember("water bottle", at: [0.33, -0.35, 1.61], date: t0.addingTimeInterval(49), source: "room_scan", on: "floor")
+        inv.remember("vitamin bottle", at: [0.0, -0.32, -0.27], date: t0, source: "room_scan", on: "nightstand")
+        #expect(inv.options(for: "water bottle").count == 2)
+        #expect(inv.options(for: "bottle").count == 3)
+        #expect(inv.options(for: "vitamin").count == 1)
+        let newest = inv.options(for: "water bottle")[0]
+        #expect(inv.optionLabel(newest) == "a water bottle, on the floor")  // T22: no neighbours when it has a place
+        var loose = RoomInventory(created: t0)
+        loose.remember("cup", at: [0, 0, -0.5], date: t0, source: "room_scan")
+        loose.remember("laptop", at: [0.2, 0, -0.5], date: t0, source: "room_scan")
+        #expect(loose.optionLabel(0) == "a cup, next to the laptop")
+    }
+
+    /// T21 row 3 (Nils: "I want it to describe, not just say where"): the room scan saves how each thing looks and
+    /// the question says it first; a map saved before has the name only.
+    @Test func t21TheQuestionDescribesEachThing() {
+        let reply = #"{"objects":[{"name":"water bottle","x":0.9,"y":0.5,"on":"nightstand","look":"Black metal water bottle with an AMD logo."}]}"#
+        let o = RoomInventory.parseSparkObjects(reply)
+        #expect(o.first?.look == "black metal water bottle with an amd logo")
+        var inv = RoomInventory(created: t0)
+        inv.remember("water bottle", at: [0.13, -0.32, -0.27], date: t0, source: "room_scan", on: "nightstand", look: o.first?.look)
+        inv.remember("water bottle", at: [0.13, -0.32, -0.25], date: t0.addingTimeInterval(9), source: "found")
+        #expect(inv.items.count == 1 && inv.items[0].look == "black metal water bottle with an amd logo")  // kept when found
+        #expect(inv.optionLabel(0) == "a black metal water bottle with an amd logo, on the nightstand")
+        let old = try! JSONDecoder().decode(RoomItem.self, from: Data(#"{"name":"cup","position":[0,0,0],"seen":0,"source":"room_scan"}"#.utf8))
+        #expect(old.look == nil)
+    }
+
     @Test func hintSaysSideAndDistance() {
         var inv = RoomInventory(created: t0)
         inv.remember("keys", at: [1.0, 0, -0.3], date: t0, source: "found")

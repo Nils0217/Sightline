@@ -22,9 +22,13 @@ public struct RoomItem: Codable, Sendable, Equatable {
     /// Other words the user might say for it, from the room scan ("vitamin bottle": "vitamins", "supplements");
     /// matched on the phone, so no model call is needed at search time (2026-11-02).
     public var aliases: [String]?
+    /// How it looks, from the room scan, as a phrase with its name ("black metal water bottle with an AMD logo"), so
+    /// the which-one question can describe it (Nils, 2026-11-04: "I want it to describe, not just say where"). nil on
+    /// maps saved before.
+    public var look: String?
 
     public init(name: String, position: SIMD3<Float>, seen: Date, source: String, on: String? = nil, fixed: Bool? = nil,
-                aliases: [String]? = nil) {
+                aliases: [String]? = nil, look: String? = nil) {
         self.name = name
         self.position = [position.x, position.y, position.z]
         self.seen = seen
@@ -32,6 +36,7 @@ public struct RoomItem: Codable, Sendable, Equatable {
         self.on = on
         self.fixed = fixed
         self.aliases = aliases
+        self.look = look
     }
 
     public var world: SIMD3<Float> { SIMD3(position[0], position[1], position[2]) }
@@ -44,8 +49,10 @@ public struct RoomInventory: Codable, Sendable, Equatable {
     public init(created: Date) { self.created = created }
 
     /// Best item for a spoken noun: same word after singular/lowercase ("keys" = "key", "my water
-    /// bottle" ~ "bottle"); a "found" entry beats a room-scan one; newest first.
-    public func match(_ noun: String) -> RoomItem? {
+    /// bottle" ~ "bottle"); with `near` (the camera), the nearest of two things more than 25 cm apart (T21: two
+    /// saved water bottles, the newer one 1.9 m away was guided to, the one in reach skipped); then a "found" entry
+    /// beats a room-scan one; newest first.
+    public func match(_ noun: String, near: SIMD3<Float>? = nil) -> RoomItem? {
         let want = Self.words(noun)
         guard !want.isEmpty else { return nil }
         // Same name first, then an alias said exactly ("supplements"), then a shared word.
@@ -54,10 +61,16 @@ public struct RoomInventory: Codable, Sendable, Equatable {
         return hits.max { a, b in
             let sa = score(a), sb = score(b)
             if sa != sb { return sa < sb }
+            if let c = near, simd_distance(a.world, b.world) > Self.sameThing {
+                return simd_distance(a.world, c) > simd_distance(b.world, c)
+            }
             if (a.source == "found") != (b.source == "found") { return b.source == "found" }
             return a.seen < b.seen
         }
     }
+
+    /// Two saved entries closer than this are the same thing seen twice, not two things.
+    public static let sameThing: Float = 0.25
 
     /// The name to ask SAM for (device test 2026-11-02: "vitamin" found nothing in 17 views, with the Nature Made
     /// jar in plain sight; the room scan had it as "vitamin bottle"). The saved name when it is the user's word plus
@@ -70,13 +83,16 @@ public struct RoomInventory: Codable, Sendable, Equatable {
 
     /// The one saved thing the word means: same name, else the only saved name that is the word plus more or has it
     /// as an alias. nil when unknown or when it fits several different things (review 2026-11-02).
-    public func target(for noun: String) -> RoomItem? {
+    public func target(for noun: String, near: SIMD3<Float>? = nil) -> RoomItem? {
         let want = Self.words(noun)
         guard !want.isEmpty else { return nil }
-        if items.contains(where: { Self.words($0.name) == want }) { return match(noun) }
+        if items.contains(where: { Self.words($0.name) == want }) { return match(noun, near: near) }
         let fits = items.filter { Self.words($0.name).isStrictSuperset(of: want) || Self.aliasHit($0, want) }
         guard Set(fits.map { Self.words($0.name) }).count == 1 else { return nil }
         return fits.max { a, b in
+            if let c = near, simd_distance(a.world, b.world) > Self.sameThing {
+                return simd_distance(a.world, c) > simd_distance(b.world, c)
+            }
             if (a.source == "found") != (b.source == "found") { return b.source == "found" }
             return a.seen < b.seen
         }
@@ -95,14 +111,54 @@ public struct RoomInventory: Codable, Sendable, Equatable {
         return out.sorted()
     }
 
+    /// T21 (Nils, 2026-11-04: "no matter what, ask what exactly the user wants"): the different saved things the word
+    /// fits (same name, the word plus more, or an alias), as indices into `items`. Entries of one name closer than
+    /// `sameThing` are one thing (the found, else the newest, entry is kept). Order: found first, then newest.
+    public func options(for noun: String) -> [Int] {
+        let want = Self.words(noun)
+        guard !want.isEmpty else { return [] }
+        let fit = items.indices.filter { i in
+            let w = Self.words(items[i].name)
+            return w == want || w.isStrictSuperset(of: want) || Self.aliasHit(items[i], want)
+        }.sorted { a, b in
+            if (items[a].source == "found") != (items[b].source == "found") { return items[a].source == "found" }
+            return items[a].seen > items[b].seen
+        }
+        var kept: [Int] = []
+        // Another name closer than 8 cm is the same thing too (T21: "bottle", alias "water bottle", 4 cm from the
+        // floor's water bottle); the vitamin bottle 13 cm from the black bottle is not.
+        for i in fit where !kept.contains(where: { k in
+            let d = simd_distance(items[k].world, items[i].world)
+            return d < 0.08 || (Self.words(items[k].name) == Self.words(items[i].name) && d < Self.sameThing)
+        }) {
+            kept.append(i)
+        }
+        return kept
+    }
+
+    /// How one option is said in the which-one question: how it looks, then what it stands on ("a black metal water
+    /// bottle with an AMD logo, on the desk"); T22: neighbours too made the question 13-19 s long, so they are said
+    /// only when nothing else places it. The name when the map has no look (saved before 2026-11-04); with no place,
+    /// the distance when known ("about 2 metres away").
+    public func optionLabel(_ i: Int, distance: Float? = nil) -> String {
+        let item = items[i], rel = relation(item)
+        let what = "a " + (item.look ?? item.name)
+        if let on = item.on, !on.isEmpty { return what + ", on the " + on }
+        if !rel.isEmpty { return what + ", " + rel }
+        guard let d = distance else { return what }
+        return d < 1 ? what + ", about \(Int((d * 10).rounded()) * 10) centimetres away"
+            : what + ", about \(Int(d.rounded())) metre\(d.rounded() == 1 ? "" : "s") away"
+    }
+
     /// One thing in a listing of a view, placed by LiDAR (same frame as `items`).
     public struct Sighting: Sendable {
         public var name: String
         public var world: SIMD3<Float>
         public var on: String?
         public var aliases: [String]?
-        public init(name: String, world: SIMD3<Float>, on: String? = nil, aliases: [String]? = nil) {
-            self.name = name; self.world = world; self.on = on; self.aliases = aliases
+        public var look: String?
+        public init(name: String, world: SIMD3<Float>, on: String? = nil, aliases: [String]? = nil, look: String? = nil) {
+            self.name = name; self.world = world; self.on = on; self.aliases = aliases; self.look = look
         }
     }
 
@@ -127,7 +183,7 @@ public struct RoomInventory: Codable, Sendable, Equatable {
         for s in sightings {
             let k = Self.words(s.name)
             if !items.contains(where: { Self.words($0.name) == k && simd_distance($0.world, s.world) < 0.5 }) { added.append(s.name) }
-            remember(s.name, at: s.world, date: date, source: source, on: s.on, aliases: s.aliases)
+            remember(s.name, at: s.world, date: date, source: source, on: s.on, aliases: s.aliases, look: s.look)
         }
         return (added, removed)
     }
@@ -139,19 +195,20 @@ public struct RoomInventory: Codable, Sendable, Equatable {
     /// Adds or moves an item. Same name within 50 cm = the same thing seen again (keeps what it stands on and
     /// whether it is fixed when the new sighting does not say).
     public mutating func remember(_ name: String, at p: SIMD3<Float>, date: Date, source: String,
-                                  on: String? = nil, fixed: Bool? = nil, aliases: [String]? = nil) {
+                                  on: String? = nil, fixed: Bool? = nil, aliases: [String]? = nil, look: String? = nil) {
         let key = Self.words(name)
         if let i = items.firstIndex(where: { Self.words($0.name) == key && simd_distance($0.world, p) < 0.5 }) {
             let old = items[i]
             let merged = Array(Set((old.aliases ?? []) + (aliases ?? []))).sorted()
             items[i] = RoomItem(name: name, position: p, seen: date, source: source, on: on ?? old.on, fixed: fixed ?? old.fixed,
-                                aliases: merged.isEmpty ? nil : merged)
+                                aliases: merged.isEmpty ? nil : merged, look: look ?? old.look)
         } else if source == "found", let i = items.firstIndex(where: { Self.words($0.name) == key && $0.source == "found" }) {
             // It moved.
             items[i] = RoomItem(name: name, position: p, seen: date, source: source, on: on, fixed: fixed,
-                                aliases: aliases ?? items[i].aliases)
+                                aliases: aliases ?? items[i].aliases, look: look ?? items[i].look)
         } else {
-            items.append(RoomItem(name: name, position: p, seen: date, source: source, on: on, fixed: fixed, aliases: aliases))
+            items.append(RoomItem(name: name, position: p, seen: date, source: source, on: on, fixed: fixed, aliases: aliases,
+                                  look: look))
         }
     }
 
@@ -364,6 +421,8 @@ public struct RoomInventory: Codable, Sendable, Equatable {
         public var fixed: Bool
         /// Other words the user might say for it (up to 4).
         public var aliases: [String] = []
+        /// How it looks, with its name ("black metal water bottle with an AMD logo").
+        public var look: String?
     }
 
     /// Objects from a Muse Spark room-scan reply:
@@ -381,8 +440,10 @@ public struct RoomInventory: Codable, Sendable, Equatable {
             let on = (o["on"] as? String)?.trimmingCharacters(in: .whitespaces).lowercased()
             let aliases = ((o["aliases"] as? [Any]) ?? []).compactMap { ($0 as? String)?.lowercased() }
                 .filter { !$0.isEmpty && $0 != name.lowercased() }
+            let look = (o["look"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters)).lowercased()
             return SparkObject(name: name.lowercased(), point: SIMD2(x, y), on: on?.isEmpty == false && on != "null" ? on : nil,
-                               fixed: (o["fixed"] as? Bool) ?? false, aliases: Array(aliases.prefix(4)))
+                               fixed: (o["fixed"] as? Bool) ?? false, aliases: Array(aliases.prefix(4)),
+                               look: look?.isEmpty == false && look != "null" ? look : nil)
         }
     }
 

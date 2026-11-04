@@ -168,7 +168,8 @@ nonisolated enum MuseAgent {
 
     /// Room scan: the objects a blind user might ask for in this photo, as
     /// `{"objects":[{"name":..,"x":..,"y":..}]}` (RoomInventory.parseSparkObjects).
-    static func listObjects(jpeg: Data, label: String) async throws -> String {
+    /// `effort`: medium for the room scan; minimal for landmark alignment during a search (T24: 36 s at medium).
+    static func listObjects(jpeg: Data, effort: Effort = .medium, label: String) async throws -> String {
         // 2026-11-01 (Nils: let the LLM infer from related things): furniture is listed too, as fixed landmarks for
         // aligning the map on a later launch, and each object says what it stands on.
         try await reply("You help a blind user remember where things are in their room. List up to 12 separate, movable "
@@ -178,10 +179,13 @@ nonisolated enum MuseAgent {
                         + "are unsure about. For each, give a short common name and the centre of it in the photo as x and y "
                         + "from 0 to 1 (x left to right, y top to bottom); for a movable object also what it stands on "
                         + "(\"on\": \"desk\") when you can see it, and up to 4 other words the user might say for it "
-                        + "(\"aliases\": a vitamin bottle is also \"vitamins\", \"supplements\"). Answer only with JSON: "
-                        + #"{"objects":[{"name":"cup","x":0.42,"y":0.61,"on":"desk","aliases":["mug","coffee"]},"#
+                        + "(\"aliases\": a vitamin bottle is also \"vitamins\", \"supplements\"), and how it looks so a blind "
+                        + "user can tell it from others like it: \"look\", up to 8 words with its name, colour first, then "
+                        + "material, size or words and logo on it (\"black metal water bottle with an AMD logo\"); when another thing in the "
+                        + "photo looks like it, the look must say what tells them apart (the words on the label, the size). Answer only with JSON: "
+                        + #"{"objects":[{"name":"cup","x":0.42,"y":0.61,"on":"desk","aliases":["mug","coffee"],"look":"white mug with a blue stripe"},"#
                         + #"{"name":"desk","x":0.5,"y":0.8,"fixed":true}]}"#,
-                        noun: "room_scan", images: [jpeg], effort: .medium, timeout: 45, label: label)
+                        noun: "room_scan", images: [jpeg], effort: effort, timeout: 45, label: label)
     }
 
     /// What one look at the photo around the target says (v9.2): names for the numbered marks, which of them
@@ -233,10 +237,14 @@ nonisolated enum MuseAgent {
 
     /// Several things like the target: one turn of a short talk to find out which one the user means. The
     /// photo marks the locked one "A" and the others 1, 2, ... Returns what to say and, once clear, the choice.
-    static func whichOne(noun: String, jpeg: Data, others: Int, transcript: [String], label: String) async throws -> (say: String, choice: String?) {
+    /// T25 (Nils: "no matter what, ask what exactly the user wants"): `mustAsk` until the user has said which one.
+    static func whichOne(noun: String, said: String, jpeg: Data, others: Int, transcript: [String], mustAsk: Bool,
+                         label: String) async throws -> (say: String, choice: String?) {
         let talk = transcript.isEmpty ? "Nothing has been said yet." : "Conversation so far:\n" + transcript.joined(separator: "\n")
-        let text = try await reply("A blind user asked for their \(noun). On this chest-camera photo the app found one marked A, "
-                                   + "and \(others) more things that may also be a \(noun), marked with numbers. \(talk)\n"
+        let ask = mustAsk ? "They have not yet said which one: ask them now, describing each, and do not choose yet. " : ""
+        let text = try await reply("A blind user said: \"\(said)\" (they want their \(noun)). On this chest-camera photo the app found "
+                                   + "one marked A, and \(others) more things that may also be a \(noun), marked with numbers. \(talk)\n"
+                                   + ask
                                    + "If it is not yet clear which one they want, ask one short question that tells them apart "
                                    + "by what a blind person can know: where it is (left, right, nearer, further), size, shape, "
                                    + "what it is made of or what is in it, or a colour they may know. Once it "
@@ -249,6 +257,39 @@ nonisolated enum MuseAgent {
         let say = (json["say"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let choice = (json["choice"] as? String) ?? (json["choice"] as? Int).map(String.init)
         return (say, choice?.uppercased())
+    }
+
+    /// T27 (Nils, 2026-11-04: "the two water bottles are right beside each other, right inside the screen"): Spark's
+    /// pick saw look-alikes and took the nearest without asking. One short question about this photo that tells them
+    /// apart; empty when it fails (the app asks its own). Text out, minimal effort, 8 s.
+    static func askWhichInView(said: String, noun: String, jpeg: Data, label: String) async throws -> String {
+        let text = try await reply("This photo is from a blind user's chest camera. They said: \"\(said)\" (they want their "
+                                   + "\(noun)). There is more than one thing in the photo that could be it. Ask them one short "
+                                   + "question that tells them apart, describing each by what a blind person can know: where "
+                                   + "it is (left, right, nearer), size, shape, material, what is in it, a colour or logo they "
+                                   + "may know. " + simplest + " Answer only with the question.",
+                                   noun: "which_in_view", images: [jpeg], effort: .minimal, timeout: 8, label: label)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+    }
+
+    /// T22 (Nils, 2026-11-04: "if the system doesn't recognise the difference at first, it can ask the user; Spark is an
+    /// advanced model, so no need to limit what it says, only time and rate"): the room map has several things the
+    /// user's word fits. Spark leads the talk from what the map knows of each (name, look, place, distance) and the
+    /// user's own words; text only, effort minimal, 8 s. `choice`: the option number once clear, nil to ask (or answer).
+    static func whichSaved(said: String, options: [String], transcript: [String], label: String) async throws -> (say: String, choice: Int?) {
+        let talk = transcript.isEmpty ? "Nothing has been asked yet." : "Conversation so far:\n" + transcript.joined(separator: "\n")
+        let text = try await reply("A blind user said: \"\(said)\". The app's saved room map has several things they may mean:\n"
+                                   + options.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+                                   + "\n\(talk)\nFind out which one they want, talking with them; once it is clear, give its number "
+                                   + "and a short confirmation. " + simplest
+                                   + #"Answer only with JSON: {"say":"...","choice":null} with choice the number once clear."#,
+                                   noun: "which_saved", images: [], effort: .minimal, timeout: 8, label: label)
+        guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"),
+              let data = String(text[start...end]).data(using: .utf8),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return ("", nil) }
+        let say = (json["say"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let n = (json["choice"] as? Int) ?? (json["choice"] as? String).flatMap { Int($0) }
+        return (say, n.flatMap { (1...options.count).contains($0) ? $0 - 1 : nil })
     }
 
     /// The hand has been out of view a while and the user said something (v9.2, Nils: "I need to see your hand

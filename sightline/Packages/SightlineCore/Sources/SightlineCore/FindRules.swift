@@ -67,6 +67,51 @@ public enum FindRules {
         hit > d - inFront
     }
 
+    /// T21: which of the saved options (`RoomInventory.optionLabel`) the user's answer means. "the nearer one" /
+    /// "the far one" use `distances`; "first" / "second" / "last" the order said; otherwise the words the answer
+    /// shares with one label only, ignoring words every label has ("water", "bottle"). nil: not clear.
+    public static func pickSaved(heard: String, labels: [String], distances: [Float]? = nil) -> Int? {
+        let said = plainWords(heard)
+        guard !labels.isEmpty, !said.isEmpty else { return nil }
+        if let d = distances, d.count == labels.count {
+            if !said.isDisjoint(with: ["nearer", "closer", "close", "nearest", "closest", "near"]) {
+                return d.indices.min { d[$0] < d[$1] }
+            }
+            if !said.isDisjoint(with: ["far", "farther", "further", "farthest", "furthest"]) {
+                return d.indices.max { d[$0] < d[$1] }
+            }
+        }
+        let order = ["first": 0, "second": 1, "third": 2]
+        if let k = said.compactMap({ order[$0] }).first, k < labels.count { return k }
+        if said.contains("last") { return labels.count - 1 }
+        let words = labels.map { plainWords($0).subtracting(["a", "the", "on", "next", "to", "and", "about", "away"]) }
+        let common = words.dropFirst().reduce(words[0]) { $0.intersection($1) }
+        let scores = words.map { $0.subtracting(common).intersection(said).count }
+        guard let best = scores.max(), best > 0, scores.filter({ $0 == best }).count == 1 else { return nil }
+        return scores.firstIndex(of: best)
+    }
+
+    /// OBSOLETE (Nils, 2026-11-04: "if the system doesn't recognise the difference at first, it can ask the user"):
+    /// same-sounding options are asked about too, with Spark leading the talk; no longer called. Kept for the record.
+    /// T22: "a brown plastic supplement bottle with yellow cap, on the desk" and "a brown plastic vitamin bottle with
+    /// yellow cap, on the desk" (Nils: "Aren't they all the same?"). True when the labels differ in more than the
+    /// things' own names, so a blind user can answer; false: do not ask, take the one named like the word.
+    public static func canTellApart(_ labels: [String], names: [String]) -> Bool {
+        guard labels.count == names.count, labels.count > 1 else { return false }
+        let rest = labels.indices.map { plainWords(labels[$0]).subtracting(plainWords(names[$0])) }
+        return Set(rest).count == rest.count
+    }
+
+    /// T22: the agent's noun with "my", "the", "your", "a", "some" in front dropped ("my phone" -> "phone"; it was
+    /// said as "Your my phone was last seen …").
+    public static func cleanNoun(_ noun: String) -> String {
+        var words = noun.split(separator: " ").map(String.init)
+        while let w = words.first, words.count > 1, ["my", "the", "your", "a", "an", "some", "our"].contains(w.lowercased()) {
+            words.removeFirst()
+        }
+        return words.joined(separator: " ")
+    }
+
     /// T19: tapping to finish the room scan while views were still being listed saved an empty room. The tap waits
     /// for them; the save happens when the last one is in.
     public struct RoomScanFinish: Sendable, Equatable {

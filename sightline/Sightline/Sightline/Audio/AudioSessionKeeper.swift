@@ -50,14 +50,36 @@ final class AudioSessionKeeper {
 
     /// (Re)apply category, activate, and force the loudspeaker. Off the main thread: setActive can block.
     func apply() {
-        Task.detached {
-            let audio = AVAudioSession.sharedInstance()
-            try? audio.setCategory(.playAndRecord, mode: .default,
-                                   options: [.defaultToSpeaker, .duckOthers, .allowBluetoothA2DP])
-            try? audio.setActive(true)
-            if audio.currentRoute.outputs.contains(where: { $0.portType == .builtInReceiver }) {
-                try? audio.overrideOutputAudioPort(.speaker)
-            }
+        Task.detached { Self.configure() }
+    }
+
+    /// After a listen (T22, Nils: "the voice is easily cut by the beep"): every listen was followed by a route change
+    /// to the earpiece for about 0.7 s (reason 3, category change: re-setting the category drops the loudspeaker
+    /// override), while the next line had already started, so it began on the loudspeaker and went on in the
+    /// earpiece. Configures, then waits until the output is the loudspeaker (at least 0.2 s for a late route change,
+    /// at most 1 s) before anything is said. Returns the wait in ms (logged).
+    func settle() async -> Int {
+        let start = Date()
+        await Task.detached { Self.configure() }.value
+        try? await Task.sleep(for: .milliseconds(200))
+        while Self.onEarpiece, Date().timeIntervalSince(start) < 1 {
+            try? await Task.sleep(for: .milliseconds(50))
         }
+        return Int(Date().timeIntervalSince(start) * 1000)
+    }
+
+    nonisolated static var onEarpiece: Bool {
+        AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .builtInReceiver }
+    }
+
+    /// The category is set only when it differs (setting it again moved the output to the earpiece, T22).
+    nonisolated static func configure() {
+        let audio = AVAudioSession.sharedInstance()
+        let options: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .duckOthers, .allowBluetoothA2DP]
+        if audio.category != .playAndRecord || audio.mode != .default || !audio.categoryOptions.isSuperset(of: options) {
+            try? audio.setCategory(.playAndRecord, mode: .default, options: options)
+        }
+        try? audio.setActive(true)
+        if onEarpiece { try? audio.overrideOutputAudioPort(.speaker) }
     }
 }

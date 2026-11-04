@@ -111,6 +111,9 @@ private struct FindARContainer: UIViewRepresentable {
         let view = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
         view.session = model.session
         view.renderOptions.insert(.disableMotionBlur)
+        // T26 (the phone ran hot): only the camera image and the dots are drawn; no lighting, shadows or effects.
+        view.renderOptions.formUnion([.disableHDR, .disableDepthOfField, .disableGroundingShadows, .disableCameraGrain,
+                                      .disableAREnvironmentLighting, .disablePersonOcclusion, .disableFaceMesh])
         context.coordinator.anchorDots(in: view)
         context.coordinator.resets = model.sessionResets
         model.arView = view

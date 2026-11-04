@@ -9,6 +9,7 @@ import ARKit
 import AVFoundation
 import Foundation
 import Observation
+import os
 import RealityKit
 import SightlineCore
 import UIKit
@@ -26,7 +27,7 @@ final class FindModel {
     /// The session asks for at most `GuidanceSession.maxAutoChecks` automatic checks.
     static let maxHoldSAMCalls = 12
 
-    private(set) var phase = Phase.idle
+    private(set) var phase = Phase.idle { didSet { updateFrameRate() } }
     private(set) var targetName: String?
     private(set) var target: SIMD3<Float>?
     /// Palm-centre reference point (red dot) and visible fingertips (small dots), world space.
@@ -122,10 +123,15 @@ final class FindModel {
     @ObservationIgnored private var rejected: [Candidate] = []
     /// "Which one?" was asked this search (a re-lock must not ask again about the first one).
     @ObservationIgnored private var whichAsked = false
+    /// T27: the user said which one of the look-alikes in view.
+    @ObservationIgnored private var whichAnswered = false
+    /// T21: the saved thing the user chose when the room map had several for the word (index into its items).
+    @ObservationIgnored private var chosenSaved: Int?
+    @ObservationIgnored private var askedSaved: Set<String> = []
 
     /// Comfortable reach (camera to index fingertip), measured once and saved across launches.
     private(set) var reachDistance: Float? = FindModel.savedReach
-    private(set) var calibrating = false
+    private(set) var calibrating = false { didSet { updateFrameRate() } }
     @ObservationIgnored private var calibration = ReachCalibration()
     @ObservationIgnored private var calibrationStarted: Double?
     /// The last hold check could not tell (status line only since 2026-11-01).
@@ -174,6 +180,9 @@ final class FindModel {
     }
 
     /// Cancel everything silently (internal: new task, background, re-measure). Invalidates late results.
+    /// Where the camera is (world space).
+    private static func origin(_ t: simd_float4x4) -> SIMD3<Float> { SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z) }
+
     private func cancel() {
         sessionID += 1
         holdCheckID += 1
@@ -240,9 +249,18 @@ final class FindModel {
     }
 
     init() {
+        // T29 (Nils: "the app freeze", right after "Hold your hand out." twice): frames at 30 Hz while guiding queued
+        // on the main actor faster than they were handled, and nothing else ran. A plain frame is dropped while two
+        // wait; frames with a photo, a rolling scan or spot evidence always go through.
+        let waiting = FrameBacklog()
         processor.onFrame = { [weak self] f in
             guard let model = self else { return }
-            Task { @MainActor in model.ingest(f) }
+            let plain = f.capture == nil && f.rollingScan == nil && f.spot == nil
+            guard waiting.enter(dropIfOver: plain ? 2 : nil) else { return }
+            Task { @MainActor in
+                model.ingest(f)
+                waiting.leave()
+            }
         }
         session.delegate = processor
         session.delegateQueue = processor.queue
@@ -279,7 +297,20 @@ final class FindModel {
     private static func trackingConfig() -> ARWorldTrackingConfiguration {
         let config = ARWorldTrackingConfiguration()
         config.frameSemantics = [.sceneDepth]
+        // T26 (Nils: "it is because Sightline running so the phone over heat"): the camera, tracking and screen at
+        // 30 fps, not 60; the hand was read on every second frame anyway (30 Hz). Same resolution.
+        let res = config.videoFormat.imageResolution
+        if config.videoFormat.framesPerSecond > 30,
+           let f = ARWorldTrackingConfiguration.supportedVideoFormats.first(where: { $0.framesPerSecond == 30 && $0.imageResolution == res }) {
+            config.videoFormat = f
+        }
         return config
+    }
+
+    /// T26: the hand at 30 Hz only while it is guided, held or measured; 10 Hz otherwise (waiting, listening,
+    /// searching, mapping), when nothing needs it that fast.
+    private func updateFrameRate() {
+        processor.fullRate = calibrating || [.guiding, .grabbing, .verifying].contains(phase)
     }
 
     func start() {
@@ -291,12 +322,17 @@ final class FindModel {
             log("room_map_load", "\(room.inventory?.items.count ?? 0) items")
         }
         session.run(config)
+        let v = config.videoFormat
+        log("video", "\(v.framesPerSecond) fps, \(Int(v.imageResolution.width))x\(Int(v.imageResolution.height))")
         audio.start()
         frameWatchdog?.cancel()
         frameWatchdog = Task { [weak self] in
+            var ticks = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard !Task.isCancelled, let self else { return }
+                ticks += 1
+                if ticks % 20 == 0 { logPerf() }
                 // No camera frames: no tones pretending to guide (the session resumes when frames return).
                 if ProcessInfo.processInfo.systemUptime - lastInputFrame > 0.75 { tones.stop() }
             }
@@ -381,9 +417,25 @@ final class FindModel {
         finish(spoken: "Okay. You have the \(targetName ?? "object").", event: "user_confirmed")
     }
 
+    /// T24: every 5 s, frames processed per second, their mean and longest time, the phone's thermal state and the
+    /// memory left; a hot phone (serious, critical) sheds record-only work (bursts) and scans the map half as often.
+    private func logPerf() {
+        let p = processor.takePerf()
+        let thermal = ProcessInfo.processInfo.thermalState
+        let name = [ProcessInfo.ThermalState.nominal: "nominal", .fair: "fair", .serious: "serious", .critical: "critical"][thermal] ?? "?"
+        let hot = thermal == .serious || thermal == .critical
+        if hot != processor.hot {
+            processor.hot = hot
+            log("thermal", hot ? "\(name): bursts off, map scan every 2 s" : "\(name): back to normal")
+        }
+        log("perf", String(format: "%.1f fps, %.0f ms mean, %.0f ms max, thermal %@, %d MB free",
+                           Double(p.frames) / 5, p.meanMs, p.maxMs, name, Int(os_proc_available_memory() / 1_048_576)))
+    }
+
     /// Saves the last 2 s and the next 2 s around a check (capped per search and per launch).
     private func startBurst(_ label: String, meta: [String: Any]) {
-        guard burstsThisSearch < Self.maxBurstsPerSearch, burstsThisLaunch < Self.maxBurstsPerLaunch,
+        // T24: a hot phone records no bursts (record only; they do not change results).
+        guard !processor.hot, burstsThisSearch < Self.maxBurstsPerSearch, burstsThisLaunch < Self.maxBurstsPerLaunch,
               processor.bursts.start(label) else { return }
         burstsThisSearch += 1
         burstsThisLaunch += 1
@@ -523,8 +575,9 @@ final class FindModel {
 
     /// Every listen (branch muse-voice): Muse is biased to the room's things and the target, and the
     /// find log gets both transcripts (`stt`).
-    private func listenOnce() async throws -> String {
-        var words = Set((room.inventory?.items ?? []).map(\.name) + mapInventory.items.map(\.name))
+    /// `extra`: words the answer may hold (T22: "AMD" was heard as "um D1" in the which-one answer).
+    private func listenOnce(extra: [String] = []) async throws -> String {
+        var words = Set((room.inventory?.items ?? []).map(\.name) + mapInventory.items.map(\.name) + extra)
         if let targetName { words.insert(targetName) }
         words.formUnion(["find", "scan the room", "stop", "is this it"])
         input.keywords = words.sorted()
@@ -555,7 +608,7 @@ final class FindModel {
             guard id == sessionID, phase == .listening else { return }
             let heard = (try? await listenOnce()) ?? ""
             // The input engine may have changed the route: back to the loudspeaker before speaking.
-            audio.apply()
+            log("audio_settle", "\(await audio.settle()) ms")
             guard id == sessionID else { return }  // long-press reset while listening
             tones.earcon(.heard)
             log("heard", heard.isEmpty ? "(nothing)" + (input.lastError.map { " " + $0 } ?? "") : heard)
@@ -592,6 +645,9 @@ final class FindModel {
         agentPhotos = []
         rejected = []
         whichAsked = false
+        whichAnswered = false
+        chosenSaved = nil
+        askedSaved = []
         samCalls = 0
         holdSAMCalls = 0
         scanCalls = 0
@@ -626,9 +682,112 @@ final class FindModel {
         speaker.say("Looking for the \(noun).")
         let id = sessionID
         Task {
+            // T28 (Nils: "when it's at the screen, use the screen"): the view first; the saved map's which-one question
+            // only when the thing is not in view (lock -> startScan).
             guard id == sessionID, phase == .locating else { return }
             await lock(noun: noun)
         }
+    }
+
+    /// T21 (Nils, 2026-11-04: "no matter what, ask what exactly the user wants"): the room map has several things the
+    /// word fits (two water bottles, or a vitamin bottle and a pill bottle): ask which one before looking; the answer
+    /// steers the map hint and Spark's pick. Words that already tell (the user said "the one on the nightstand") skip
+    /// the question. T22: Spark leads the talk (up to 4 calls), the app's own question when it gives no answer; asked
+    /// once per word per search; no clear answer: the nearer one. False when the search ended meanwhile.
+    private func askWhichSaved(_ noun: String) async -> Bool {
+        let id = sessionID
+        guard let inv = room.inventory, !askedSaved.contains(noun) else { return true }
+        askedSaved.insert(noun)
+        let options = Array(inv.options(for: noun).prefix(3))
+        guard options.count > 1 else { return true }
+        let here = Self.origin(lastCamera)
+        let distances = room.activeInventory.map { a in options.map { simd_distance(a.items[$0].world, here) } }
+        let labels = options.indices.map { inv.optionLabel(options[$0], distance: distances?[$0]) }
+        log("which_saved", labels.joined(separator: " | "))
+        func choose(_ k: Int, _ why: String) {
+            chosenSaved = options[k]
+            log("which_saved_choice", "\(labels[k]) (\(why))")
+            // Spark's pick gets the choice too: how it looks and where.
+            let item = inv.items[options[k]], rel = inv.relation(item)
+            let which = [item.look, rel.isEmpty ? nil : rel].compactMap { $0 }.joined(separator: ", ")
+            if !which.isEmpty { userWords = (userWords ?? noun) + " (the one: \(which))" }
+        }
+        if let k = FindRules.pickSaved(heard: userWords ?? noun, labels: labels) {
+            choose(k, "said")
+            return true
+        }
+        // What tells them apart, for the speech recogniser ("amd", "green", "metal").
+        let hints = Array(Set(labels.flatMap { FindRules.plainWords($0) }).subtracting(FindRules.plainWords(noun)))
+        // T22 (Nils): Spark leads the talk, limited only by time (8 s a call) and rate (4 calls a search); its words
+        // are not restricted. What the map knows of each option goes to it.
+        let facts = options.indices.map { k -> String in
+            let item = inv.items[options[k]], rel = inv.relation(item)
+            return [item.name, item.look.map { "looks like: \($0)" }, rel.isEmpty ? nil : rel,
+                    distances.map { String(format: "about %.0f cm from the user", $0[k] * 100) }].compactMap { $0 }.joined(separator: "; ")
+        }
+        var transcript: [String] = []
+        var fallback = "I remember " + Self.spokenList(labels) + ". Which one?"
+        for turn in 0..<4 {
+            let r = try? await MuseAgent.whichSaved(said: userWords ?? noun, options: facts, transcript: transcript,
+                                                    label: "which_saved_\(id)_\(turn)")
+            guard id == sessionID else { return false }
+            if let r { log("which_saved_spark", "\(r.say) -> \(r.choice.map { "\($0 + 1)" } ?? "?")") }
+            if let k = r?.choice {
+                if let line = r?.say, !line.isEmpty { say(SpokenLine(text: line, interrupt: false)) }
+                choose(k, transcript.isEmpty ? "spark, said" : "spark")
+                return true
+            }
+            // No answer from Spark (network, 8 s): the app's own question.
+            let question = r.map(\.say).flatMap { $0.isEmpty ? nil : $0 } ?? fallback
+            say(SpokenLine(text: question, interrupt: false))
+            try? await Task.sleep(for: .milliseconds(150))
+            while speaker.isSpeaking {
+                guard id == sessionID else { return false }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            tones.earcon(.listening)
+            try? await Task.sleep(for: .milliseconds(180))
+            let heard = (try? await listenOnce(extra: hints)) ?? ""
+            log("audio_settle", "\(await audio.settle()) ms")
+            guard id == sessionID else { return false }
+            log("which_saved_heard", heard.isEmpty ? "(nothing)" : heard)
+            if heard.isEmpty { break }
+            if CommandParser.parse(heard) == .stop {
+                finish(spoken: "Stopped. Tap to speak a command.", event: "stop")
+                return false
+            }
+            tones.earcon(.heard)
+            if r == nil, let k = FindRules.pickSaved(heard: heard, labels: labels, distances: distances) {
+                choose(k, "answer")
+                return true
+            }
+            transcript += ["App: \(question)", "User: \(heard)"]
+            // Again without Spark: shorter, by look.
+            let looks = options.compactMap { inv.items[$0].look }
+            if looks.count == options.count {
+                fallback = "Which one? " + looks.map { "The \($0)" }.joined(separator: ", or ") + "?"
+            }
+        }
+        let k = distances.flatMap { d in d.indices.min { d[$0] < d[$1] } } ?? 0
+        choose(k, "no answer")
+        say(SpokenLine(text: distances == nil ? "I'll look for the first one." : "I'll look for the nearer one.", interrupt: false))
+        return true
+    }
+
+    /// The saved thing for a word, where it is now: the one the user chose (T21), else the nearest (`room.item`).
+    private func mapItem(for noun: String, near camera: simd_float4x4) -> RoomItem? {
+        if let i = chosenSaved, let a = room.activeInventory, a.items.indices.contains(i), a.options(for: noun).contains(i) {
+            return a.items[i]
+        }
+        return room.item(for: noun, near: Self.origin(camera))
+    }
+
+    /// The same without a frame (relations only).
+    private func savedMapItem(for noun: String) -> RoomItem? {
+        if let i = chosenSaved, let inv = room.inventory, inv.items.indices.contains(i), inv.options(for: noun).contains(i) {
+            return inv.items[i]
+        }
+        return room.savedItem(for: noun)
     }
 
     /// OBSOLETE (Nils, 2026-11-03, after T18: every feature from before Spark picks stays): commands the parser
@@ -706,7 +865,9 @@ final class FindModel {
     /// `scanning`: counted against the scan budget (ScanPlanner) instead of `maxSAMCalls`.
     /// Small objects (SmallObjects, e.g. keys): a 930 px photo cut into 2x2 tiles of ~512 px, one SAM
     /// call per tile in parallel (2026-10-29: the keys were 13x17 px at 512 px and SAM missed them).
-    private func segment(_ noun: String, scanning: Bool = false) async -> Result<[Candidate], FindError> {
+    /// `spotOnly`: only the crop at the room map's spot (T23 race with Spark's pick); `crop: false`: skip that crop
+    /// (already tried on this view).
+    private func segment(_ noun: String, scanning: Bool = false, spotOnly: Bool = false, crop: Bool = true) async -> Result<[Candidate], FindError> {
         let id = sessionID
         guard scanning || samCalls < Self.maxSAMCalls else { return .failure(FindError("budget")) }
         let query = samQuery(noun)
@@ -726,8 +887,8 @@ final class FindModel {
             // The room map says where it is and that spot is in this photo: SAM looks there only (one call, even for
             // a small thing). Nothing there: the whole photo, same snapshot (moved or hidden, 2026-11-02).
             var cropped = false
-            let mapItem = room.item(for: noun)
-            if cropMisses < 2, let w = mapItem?.world,
+            let mapItem = self.mapItem(for: noun, near: s.cameraTransform)
+            if crop, cropMisses < 2, let w = mapItem?.world,
                let p = RoomInventory.portraitPoint(world: w, intrinsics: s.intrinsics, cameraTransform: s.cameraTransform) {
                 let tile = SmallObjects.tile(around: p, in: s.imageSize)
                 let rect = CGRect(x: tile.origin.x, y: tile.origin.y, width: tile.size.x, height: tile.size.y)
@@ -745,6 +906,11 @@ final class FindModel {
                     }
                 }
                 guard id == sessionID else { return .failure(FindError("cancelled")) }
+            }
+            if spotOnly, !(cropped && !records.isEmpty) {
+                // The saved-spot check (T16) still runs on an empty crop.
+                if cropped, let item = mapItem { checkSavedSpot(item, snapshot: s) }
+                return .failure(FindError(cropped ? "no_object" : "no_spot"))
             }
             if cropped && !records.isEmpty {
                 // Found where the map said.
@@ -869,6 +1035,8 @@ final class FindModel {
         switch result {
         case .failure(let error):
             log("sam_lock_fail", error.reason)
+            // T28: not in view: now the saved map may help, and which saved one is asked first.
+            guard await askWhichSaved(noun), id == sessionID, phase == .locating else { return }
             startScan(noun)
         case .success(let list):
             log("sam_lock", "\(list.count) candidates")
@@ -891,6 +1059,7 @@ final class FindModel {
         let label = "pick_\(sessionID)_\(samCalls + scanCalls)"
         let kind = scanning ? "scan" : "sam"
         guard var pick = try? await MuseAgent.pick(request: userWords ?? noun, jpeg: s.jpeg, label: label) else {
+            if Task.isCancelled { return .failure(FindError("cancelled")) }  // the map spot answered first (T23)
             log("api_error", "pick: no answer")
             return .failure(FindError("api_error"))
         }
@@ -903,6 +1072,24 @@ final class FindModel {
         }
         log("spark_pick", String(format: "%@ at %.2f, %.2f, looks like %@; %@ (%d similar)", pick.want, pick.x, pick.y,
                                  pick.sam, pick.how, pick.similar))
+        // T27: look-alikes in view and the user has not said which one: ask now, with this photo, then pick again
+        // with the answer (Nils: "no matter what, ask what exactly the user wants").
+        if pick.similar > 0, chosenSaved == nil, !whichAsked {
+            whichAsked = true
+            if let heard = await askInView(noun, jpeg: s.jpeg, id: id) {
+                guard id == sessionID else { return .failure(FindError("cancelled")) }
+                whichAnswered = true
+                userWords = (userWords ?? noun) + ". Asked which one, they said: " + heard
+                if let again = try? await MuseAgent.pick(request: userWords ?? noun, jpeg: s.jpeg, label: "\(label)_asked") {
+                    guard id == sessionID else { return .failure(FindError("cancelled")) }
+                    if again.visible {
+                        pick = again
+                        log("spark_pick", String(format: "after the answer: %@ at %.2f, %.2f; %@", pick.want, pick.x, pick.y, pick.how))
+                    }
+                }
+            }
+            guard id == sessionID else { return .failure(FindError("cancelled")) }
+        }
         // Look-alikes (T18: vitamin and melatonin, same yellow caps, "lower of two"): one closer look on the crop around
         // the pick, about 1.8x, to read the labels. It says not here: the labels say none of them is it.
         if pick.similar > 0 {
@@ -977,9 +1164,28 @@ final class FindModel {
     /// Every search photo (the lock, each scan view, the agent's find_object): Spark picks first; when it says the thing
     /// is not in view (or gives no answer), the SAM-first search runs as before (map crop and saved-spot check, tiles,
     /// SAM names, Spark's yes/no, rejected list), so nothing from before Spark picks is lost (Nils, 2026-11-03, T18).
+    /// T23's saved-spot race; off since T28 (Nils): Spark's pick on the view decides, the map only after it.
+    static let spotFirst = false
+
     private func findCandidates(_ noun: String, scanning: Bool = false) async -> Result<[Candidate], FindError> {
         guard Self.sparkFirst else { return await segment(noun, scanning: scanning) }
-        let picked = await sparkSegment(noun, scanning: scanning)
+        // T23 (Nils: "too slow to find the supplement bottle"): Spark's pick took 8.7 s to say "not in view" with the
+        // bottle in the photo; SAM's crop at the room map's spot found it 0.5 s later. When that spot is in view the
+        // crop runs at the same time as the pick, and what it finds there is taken at once (Spark's yes/no still checks
+        // it); nothing there: Spark's pick as before.
+        let pick = Task { await self.sparkSegment(noun, scanning: scanning) }
+        var cropTried = false
+        // OBSOLETE (Nils, 2026-11-04: "remove the map spot going first; what is in view, use the view"): the race is off.
+        if Self.spotFirst, cropMisses < 2, mapItem(for: noun, near: lastCamera) != nil {
+            let spot = await segment(noun, scanning: scanning, spotOnly: true)
+            cropTried = true
+            if case .success(let list) = spot {
+                pick.cancel()
+                log("map_spot_first", "\(list.count) at the saved spot; Spark's pick not waited for")
+                return spot
+            }
+        }
+        let picked = await pick.value
         switch picked {
         case .success:
             return picked
@@ -987,7 +1193,7 @@ final class FindModel {
             return picked
         case .failure(let error):
             log("spark_fallback", "\(error.reason): SAM search")
-            return await segment(noun, scanning: scanning)
+            return await segment(noun, scanning: scanning, crop: !cropTried)
         }
     }
 
@@ -1040,17 +1246,46 @@ final class FindModel {
 
     // MARK: Keep scanning (object not in view)
 
+    /// T27: ask which of the look-alikes in this photo the user wants; their answer, nil on silence or a stop.
+    private func askInView(_ noun: String, jpeg: Data, id: Int) async -> String? {
+        let q = (try? await MuseAgent.askWhichInView(said: userWords ?? noun, noun: noun, jpeg: jpeg, label: "which_view_\(id)")) ?? ""
+        guard id == sessionID else { return nil }
+        let question = q.count > 8 ? q : "I see more than one \(noun). Which one do you want?"
+        log("which_in_view", question)
+        say(SpokenLine(text: question, interrupt: false))
+        try? await Task.sleep(for: .milliseconds(150))
+        while speaker.isSpeaking {
+            guard id == sessionID else { return nil }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        tones.earcon(.listening)
+        try? await Task.sleep(for: .milliseconds(180))
+        let heard = (try? await listenOnce()) ?? ""
+        log("audio_settle", "\(await audio.settle()) ms")
+        guard id == sessionID else { return nil }
+        log("which_heard", heard.isEmpty ? "(nothing)" : heard)
+        if heard.isEmpty { return nil }
+        if CommandParser.parse(heard) == .stop {
+            finish(spoken: "Stopped. Tap to speak a command.", event: "stop")
+            return nil
+        }
+        tones.earcon(.heard)
+        return heard
+    }
+
     /// Not found in this view: keep looking while the user turns, one SAM call per new steady view.
     private func startScan(_ noun: String) {
         var planner = ScanPlanner(time: lastFrameTime)
         planner.markSearched(cameraTransform: lastCamera)
         var text = ScanPlanner.startLine(noun)
         // Room map: say where it was last seen and turn the scan toward it first.
-        if let item = room.item(for: noun) {
+        if let item = mapItem(for: noun, near: lastCamera) {
             planner.hint = item.world
-            text = RoomInventory.hint(item, noun: noun, cameraTransform: lastCamera) + " " + text
+            // T23: "… I don't see the X here. Turn slowly." after the hint took 8 s before the user turned.
+            let hint = RoomInventory.hint(item, noun: noun, cameraTransform: lastCamera)
+            text = hint + (hint.contains("ahead of you") ? " " + text : " Turn that way slowly.")
             log("room_hint", "\(item.name) \(item.source) \(item.seen)")
-        } else if let inv = room.inventory, let item = room.savedItem(for: noun), let rel = inv.relationHint(item, noun: noun) {
+        } else if let inv = room.inventory, let item = savedMapItem(for: noun), let rel = inv.relationHint(item, noun: noun) {
             // No frame for the saved map yet: what it was on and next to still holds (Nils, 2026-11-01).
             text = rel + " " + text
             log("room_relation", "\(item.name): \(inv.relation(item))")
@@ -1163,7 +1398,8 @@ final class FindModel {
         Task {
             defer { alignInFlight = false }
             guard let s = await snapshot(),
-                  let reply = try? await MuseAgent.listObjects(jpeg: s.jpeg, label: "align_\(id)_\(n)") else {
+                  // T24: at medium this listing took 36 s and ran out of output (4096 tokens): nothing was seen.
+                  let reply = try? await MuseAgent.listObjects(jpeg: s.jpeg, effort: .minimal, label: "align_\(id)_\(n)") else {
                 log("room_align", "no answer")
                 return
             }
@@ -1184,7 +1420,8 @@ final class FindModel {
             // Rolling update: a saved thing whose spot is in this photo, with nothing in front of it, but was seen
             // elsewhere has moved; its old entry goes (Nils, 2026-11-02).
             let sightings = objects.filter { !$0.0.fixed }.map {
-                RoomInventory.Sighting(name: $0.0.name, world: $0.1, on: $0.0.on, aliases: $0.0.aliases.isEmpty ? nil : $0.0.aliases)
+                RoomInventory.Sighting(name: $0.0.name, world: $0.1, on: $0.0.on, aliases: $0.0.aliases.isEmpty ? nil : $0.0.aliases,
+                                       look: $0.0.look)
             }
             if let r = room.refresh(sightings, source: "seen", isVisible: { Self.inView($0, snapshot: s) }) {
                 if !r.added.isEmpty { log("room_map_added", r.added.joined(separator: " ")) }
@@ -1193,7 +1430,7 @@ final class FindModel {
             // A scan already running for something the map knows: turn it there now. No scan yet: startScan says
             // the hint itself (review 2026-11-01: it was said twice, and during the first look at this view).
             guard id == sessionID, phase == .searching, scan != nil, let noun = targetName,
-                  let item = room.item(for: noun) else { return }
+                  let item = mapItem(for: noun, near: lastCamera) else { return }
             scan?.hint = item.world
             scan?.hintIsGuess = false
             log("room_hint", "\(item.name) \(item.source) \(item.seen) (aligned)")
@@ -1241,7 +1478,7 @@ final class FindModel {
             say(SpokenLine(text: planner.directionPrompt(cameraTransform: f.cameraTransform), interrupt: false))
         case .giveUp:
             var text = ScanPlanner.giveUpLine(noun)
-            if let item = room.item(for: noun) {
+            if let item = mapItem(for: noun, near: f.cameraTransform) {
                 text = RoomInventory.hint(item, noun: noun, cameraTransform: f.cameraTransform) + " " + text
             } else if let p = lastSeen[noun] {
                 text = Self.earlierLine(p, cameraTransform: f.cameraTransform) + " " + text
@@ -1438,12 +1675,23 @@ final class FindModel {
         guide?.conversing = true
         defer { if id == sessionID { guide?.conversing = false } }
         var transcript: [String] = []
+        // T25: Spark took the first one at once ("water bottle", two in view, never asked). Until the user has said
+        // which one (here, or to the which-saved question), a choice is not taken: Spark is asked again to ask.
+        var answered = chosenSaved != nil || whichAnswered
         for turn in 0..<4 {
-            let r = try? await MuseAgent.whichOne(noun: noun, jpeg: photo, others: options.count, transcript: transcript,
-                                                  label: "which_\(id)_\(turn)")
-            guard id == sessionID, let r else { return }
-            log("which_one", "\(r.say) -> \(r.choice ?? "?")")
-            if let choice = r.choice {
+            let r = try? await MuseAgent.whichOne(noun: noun, said: userWords ?? noun, jpeg: photo, others: options.count,
+                                                  transcript: transcript, mustAsk: !answered, label: "which_\(id)_\(turn)")
+            guard id == sessionID else { return }
+            if let r { log("which_one", "\(r.say) -> \(r.choice ?? "?")") }
+            var question = r?.say ?? ""
+            if r?.choice != nil, !answered {
+                log("which_one", "chose before asking: ask")
+                if turn == 0 {
+                    transcript += ["App (not said aloud): the user has not said which one yet; ask them."]
+                    continue
+                }
+                question = ""
+            } else if let r, let choice = r.choice {
                 if !r.say.isEmpty { say(SpokenLine(text: r.say, interrupt: true)) }
                 if choice == "A" {
                     for o in options { guide?.markOther(at: o.centre, name: noun) }
@@ -1452,8 +1700,12 @@ final class FindModel {
                 }
                 return
             }
-            guard !r.say.isEmpty else { return }
-            say(SpokenLine(text: r.say, interrupt: true))
+            // No question from Spark (network, or it chose twice without asking): the app's own, until answered.
+            if question.isEmpty {
+                guard !answered else { return }
+                question = "There is more than one \(noun) here. Which one do you want?"
+            }
+            say(SpokenLine(text: question, interrupt: true))
             try? await Task.sleep(for: .milliseconds(150))
             while speaker.isSpeaking {
                 guard id == sessionID else { return }
@@ -1462,7 +1714,7 @@ final class FindModel {
             tones.earcon(.listening)
             try? await Task.sleep(for: .milliseconds(180))
             let heard = (try? await listenOnce()) ?? ""
-            audio.apply()
+            log("audio_settle", "\(await audio.settle()) ms")
             guard id == sessionID else { return }
             log("which_heard", heard.isEmpty ? "(nothing)" : heard)
             if heard.isEmpty { return }
@@ -1471,7 +1723,8 @@ final class FindModel {
                 return
             }
             tones.earcon(.heard)
-            transcript += ["App: \(r.say)", "User: \(heard)"]
+            answered = true
+            transcript += ["App: \(question)", "User: \(heard)"]
         }
     }
 
@@ -1595,7 +1848,7 @@ final class FindModel {
                 tones.earcon(.listening)
                 try? await Task.sleep(for: .milliseconds(180))
                 let heard = (try? await listenOnce()) ?? ""
-                audio.apply()
+                log("audio_settle", "\(await audio.settle()) ms")
                 guard id == sessionID else { return }
                 log("hand_help_heard", heard.isEmpty ? "(nothing)" : heard)
                 if heard.isEmpty { return }
@@ -1688,7 +1941,8 @@ final class FindModel {
         switch action {
         case .getState:
             return .output(agentState().json())
-        case .findObject(let noun):
+        case .findObject(let said):
+            let noun = FindRules.cleanNoun(said)
             // 2026-10-29: Spark called find_object five times on the same view: a phrase that already
             // found nothing goes straight to the scan.
             if notFound.contains(noun) {
@@ -1721,6 +1975,15 @@ final class FindModel {
                 }
                 candidates = Self.merged(candidates, fresh)
                 let kept = fresh.filter { c in candidates.contains { $0.info.id == c.info.id } }
+                // T24: Spark already picked the one the user means (their own words; labels read on a closer look):
+                // guide there now. The agent went on for 4 more turns (7-13 s each), re-searching and asking, 142 s to
+                // the lock. A look-alike beside it is still asked about after the lock (look-around).
+                if let pick = kept.first(where: \.sparkChosen) {
+                    if !pick.info.name.isEmpty { targetName = agentIdentity(for: pick.info.name) }
+                    log("agent_select", "spark pick \(pick.info.id); no more agent turns")
+                    select(pick)
+                    return .ended
+                }
                 if let first = kept.first, let photo = Self.drawLabelledBoxes(first.sourceJPEG, boxes: kept.map { ($0.box, $0.info.id) }) {
                     agentPhotos.append(("Photo for find_object \"\(noun)\": each candidate is boxed in green with its candidate_id.", photo))
                 }
@@ -1732,13 +1995,23 @@ final class FindModel {
                 // into the 3D map"): tell Spark where, so it turns the user there instead of searching this view.
                 // A widened name ("bottle") points at the narrower one's spot only (T15: the lotion bottle's).
                 let meant = agentIdentity(for: noun)
-                if let item = room.item(for: meant) {
+                // T28: the saved map only now, the thing not in view: which saved one first.
+                guard await askWhichSaved(meant), id == sessionID, phase == .locating else { return .ended }
+                // T22: the user chose a saved one and it is not in this view: turn there now (the agent went on to
+                // "cup" and "bottle" first, 20 s).
+                if let i = chosenSaved, room.inventory?.options(for: meant).contains(i) == true {
+                    log("agent_scan", "chosen \(meant)")
+                    targetName = meant
+                    startScan(meant)
+                    return .ended
+                }
+                if let item = mapItem(for: meant, near: lastCamera) {
                     let hint = RoomInventory.hint(item, noun: noun, cameraTransform: lastCamera)
                     log("agent_room_hint", "\(noun) -> \(item.name)")
                     return .output(#"{"not_in_view":""# + noun + #"","room_map":""# + hint
                                    + #" Call scan_for to turn the user there.","state":"# + agentState().json() + "}")
                 }
-                if let inv = room.inventory, let item = room.savedItem(for: meant), let rel = inv.relationHint(item, noun: noun) {
+                if let inv = room.inventory, let item = savedMapItem(for: meant), let rel = inv.relationHint(item, noun: noun) {
                     log("agent_room_relation", "\(noun) -> \(item.name)")
                     return .output(#"{"not_in_view":""# + noun + #"","room_map":""# + rel
                                    + #" (no direction yet). Tell the user, then call scan_for.","state":"# + agentState().json() + "}")
@@ -1746,7 +2019,7 @@ final class FindModel {
                 return .output(agentState().json())
             }
         case .scanFor(let said):
-            let noun = agentIdentity(for: said)
+            let noun = agentIdentity(for: FindRules.cleanNoun(said))
             log("agent_scan", noun)
             targetName = noun
             startScan(noun)
@@ -1788,7 +2061,7 @@ final class FindModel {
             guard id == sessionID, phase == .locating else { return .ended }
             let answer = (try? await listenOnce()) ?? ""
             guard id == sessionID, phase == .locating else { return .ended }
-            audio.apply()
+            log("audio_settle", "\(await audio.settle()) ms")
             log("agent_answer", answer)
             return .output(answer.isEmpty ? "(no answer)" : answer)
         case .stop:
@@ -1907,7 +2180,7 @@ final class FindModel {
         }
         guidePhase = out.phase.rawValue
         handDistance = out.handDistance
-        tones.update(distance: out.toneDistance)
+        tones.update(distance: out.toneDistance, ducked: speaker.isSpeaking)
         for line in out.lines {
             say(line)
             // Snapshot the hand at the moments that tell us most about the hand-point bias.
@@ -2015,7 +2288,7 @@ final class FindModel {
                     guard let p = RoomInventory.place(portrait: o.point, depth: s.depth, intrinsics: s.intrinsics,
                                                       cameraTransform: s.cameraTransform) else { continue }
                     mapInventory.remember(o.name, at: p, date: Date(), source: "room_scan", on: o.on, fixed: o.fixed ? true : nil,
-                                         aliases: o.aliases.isEmpty ? nil : o.aliases)
+                                         aliases: o.aliases.isEmpty ? nil : o.aliases, look: o.look)
                     names.append(o.name)
                 }
                 log("map_view", "\(view): " + names.joined(separator: " "))
@@ -2156,7 +2429,22 @@ nonisolated struct FindFrame: Sendable {
     var spot: SpotEvidence?
 }
 
-/// Runs the six-point hand pipeline on every second frame (≤ 30 Hz) off the main thread; drops frames
+/// T29: how many frames wait for the main actor.
+nonisolated final class FrameBacklog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    /// False (dropped) when `dropIfOver` is set and that many already wait.
+    func enter(dropIfOver limit: Int?) -> Bool {
+        lock.withLock {
+            if let limit, count >= limit { return false }
+            count += 1
+            return true
+        }
+    }
+    func leave() { lock.withLock { count = max(0, count - 1) } }
+}
+
+/// Runs the six-point hand pipeline at ≤ 30 Hz (10 Hz when not guiding, T26) off the main thread; drops frames
 /// while busy (FrameGate) so ARKit never waits on us.
 nonisolated final class FindFrameProcessor: NSObject, ARSessionDelegate, @unchecked Sendable {
     private let gate = FrameGate(label: "sightline.find.frames")
@@ -2165,10 +2453,16 @@ nonisolated final class FindFrameProcessor: NSObject, ARSessionDelegate, @unchec
     private let locator = HandKeypointLocator()
     /// Last 2 s at 10 Hz for burst recordings around hold checks.
     let bursts = BurstRing()
-    private var frameCount = 0
+    private var lastProcessed: Double = 0
 
     // Written from the main actor, read on `queue`.
     private let lock = NSLock()
+    private var _fullRate = false
+    /// T26: process frames at 30 Hz (hand guided, held or measured); 10 Hz when false.
+    var fullRate: Bool {
+        get { lock.withLock { _fullRate } }
+        set { lock.withLock { _fullRate = newValue } }
+    }
     private var _target: SIMD3<Float>?
     var target: SIMD3<Float>? {
         get { lock.withLock { _target } }
@@ -2187,14 +2481,39 @@ nonisolated final class FindFrameProcessor: NSObject, ARSessionDelegate, @unchec
     }
     private var lastRolling: Double = 0
 
+    // T24 (Nils: "the iPhone seems not to run smoothly, some screen lag"; burst frames came every 0.3-0.6 s instead
+    // of 0.13 s): how long each processed frame takes, for the `perf` log line.
+    private var perfFrames = 0
+    private var perfMs: Double = 0
+    private var perfMaxMs: Double = 0
+    /// Frames processed since the last call, their mean and longest time (ms).
+    func takePerf() -> (frames: Int, meanMs: Double, maxMs: Double) {
+        lock.withLock {
+            defer { perfFrames = 0; perfMs = 0; perfMaxMs = 0 }
+            return (perfFrames, perfFrames > 0 ? perfMs / Double(perfFrames) : 0, perfMaxMs)
+        }
+    }
+    private var _hot = false
+    /// The phone is hot (thermal state serious or critical): the rolling scan runs every 2 s instead of 1 s.
+    var hot: Bool {
+        get { lock.withLock { _hot } }
+        set { lock.withLock { _hot = newValue } }
+    }
+
     /// The next processed frame also carries its photo (FrameSnapshot) under this kind.
     func requestCapture(_ kind: String) { lock.withLock { _capture = kind } }
     private func takeCapture() -> String? { lock.withLock { defer { _capture = nil }; return _capture } }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        frameCount += 1
-        guard frameCount % 2 == 0 else { return }
+        // T26: at most 30 Hz (the camera may run at 60), 10 Hz when nothing needs the hand fast.
+        guard frame.timestamp - lastProcessed >= (fullRate ? 0.03 : 0.095) else { return }
+        lastProcessed = frame.timestamp
         gate.submit(frame) { [self] frame in
+            let began = CACurrentMediaTime()
+            defer {
+                let ms = (CACurrentMediaTime() - began) * 1000
+                lock.withLock { perfFrames += 1; perfMs += ms; perfMaxMs = max(perfMaxMs, ms) }
+            }
             let r = locator.locate(in: frame)
             let tracking = FrameProcessor.describe(frame.camera.trackingState)
             let capture = takeCapture().flatMap { kind in
@@ -2206,7 +2525,7 @@ nonisolated final class FindFrameProcessor: NSObject, ARSessionDelegate, @unchec
             }
             let spot = capture?.kind.hasPrefix("hold_check") == true ? object.flatMap { spotEvidence(frame: frame, object: $0) } : nil
             var rolling: ObstacleMap?
-            if let object, frame.timestamp - lastRolling >= 1 {
+            if let object, frame.timestamp - lastRolling >= (hot ? 2 : 1) {
                 lastRolling = frame.timestamp
                 rolling = rollingScan(frame: frame, object: object)
             }

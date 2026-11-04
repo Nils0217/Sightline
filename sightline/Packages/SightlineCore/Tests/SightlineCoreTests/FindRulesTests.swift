@@ -62,6 +62,39 @@ struct FindRulesTests {
         #expect(FindRules.spotInClearView(spotDistance: 0.6, seenDistance: 0.9))  // the table behind: it is gone
     }
 
+    /// T21: two saved water bottles; the answer picks one by place, by "nearer"/"far", or by order; unclear is nil.
+    @Test func t21TheAnswerPicksOneSavedThing() {
+        let labels = ["a water bottle on the nightstand, next to the vitamin bottle", "a water bottle on the floor, next to the clothes"]
+        let d: [Float] = [0.3, 1.9]
+        #expect(FindRules.pickSaved(heard: "the one on the nightstand", labels: labels) == 0)
+        #expect(FindRules.pickSaved(heard: "near the vitamins", labels: labels, distances: d) == 0)
+        #expect(FindRules.pickSaved(heard: "floor", labels: labels) == 1)
+        #expect(FindRules.pickSaved(heard: "the far one", labels: labels, distances: d) == 1)
+        #expect(FindRules.pickSaved(heard: "the second", labels: labels) == 1)
+        #expect(FindRules.pickSaved(heard: "the water bottle", labels: labels) == nil)  // both are: ask
+        #expect(FindRules.pickSaved(heard: "I need some water", labels: labels) == nil)
+        let looks = ["a black metal water bottle with an amd logo, on the nightstand", "a clear plastic water bottle, on the floor"]
+        #expect(FindRules.pickSaved(heard: "the black one", labels: looks) == 0)
+        #expect(FindRules.pickSaved(heard: "plastic", labels: looks) == 1)
+    }
+
+    /// T22: the two brown bottles with yellow caps differ only in their names: no question. AMD vs green lid: ask.
+    @Test func t22OnlyAskWhenTheyCanBeToldApart() {
+        #expect(!FindRules.canTellApart(["a brown plastic supplement bottle with yellow cap, on the desk",
+                                         "a brown plastic vitamin bottle with yellow cap, on the desk"],
+                                        names: ["supplement bottle", "vitamin bottle"]))
+        #expect(FindRules.canTellApart(["a white plastic water bottle with light green lid, on the side table",
+                                        "a black metal water bottle with amd logo, on the desk"],
+                                       names: ["water bottle", "water bottle"]))
+    }
+
+    /// T22: "Your my phone was last seen …".
+    @Test func t22TheAgentsNounLosesMy() {
+        #expect(FindRules.cleanNoun("my phone") == "phone")
+        #expect(FindRules.cleanNoun("the black water bottle") == "black water bottle")
+        #expect(FindRules.cleanNoun("my") == "my")
+    }
+
     /// T19 row 1: a tap 2 s after the second view went out waits for it, then saves once.
     @Test func t19TheTapWaitsForViewsStillBeingListed() {
         var f = FindRules.RoomScanFinish()

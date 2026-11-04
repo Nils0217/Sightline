@@ -107,7 +107,8 @@ final class RoomMapStore {
 
     /// Hint for a noun when the map has a frame: the one thing it means and where it is now (nil when the word fits
     /// several saved things, review 2026-11-02: "bottle" pointed at one of two bottles).
-    func item(for noun: String) -> RoomItem? { activeInventory?.target(for: noun) }
+    /// `near`: the camera; of two saved things with the name, the nearer one (T21).
+    func item(for noun: String, near: SIMD3<Float>? = nil) -> RoomItem? { activeInventory?.target(for: noun, near: near) }
 
     /// The saved item without a frame (relations only: "on the desk, next to the laptop"); same rule.
     func savedItem(for noun: String) -> RoomItem? { inventory?.target(for: noun) }
@@ -118,7 +119,7 @@ final class RoomMapStore {
         guard var inv = inventory, active || alignment != nil else { return nil }
         let toWorld: (SIMD3<Float>) -> SIMD3<Float> = { [alignment] p in alignment.map { RoomInventory.apply($0, p) } ?? p }
         let saved = seen.compactMap { s -> RoomInventory.Sighting? in
-            toSaved(s.world).map { RoomInventory.Sighting(name: s.name, world: $0, on: s.on, aliases: s.aliases) }
+            toSaved(s.world).map { RoomInventory.Sighting(name: s.name, world: $0, on: s.on, aliases: s.aliases, look: s.look) }
         }
         let r = inv.refresh(with: saved, date: Date(), source: source, isVisible: { isVisible(toWorld($0)) })
         inventory = inv
